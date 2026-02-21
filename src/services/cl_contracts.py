@@ -114,6 +114,64 @@ def select_front_month_contract(
     return qualified_contracts[0]
 
 
+def format_contract_month_from_expiry(contract_expiry: str | None) -> str | None:
+    """Derive YYYY-MM contract month from a raw IB expiry string (no IB objects needed)."""
+    raw = (contract_expiry or "").strip()
+    if len(raw) >= 6 and raw[:6].isdigit():
+        return f"{raw[:4]}-{raw[4:6]}"
+    expiry = parse_contract_expiry(raw)
+    if expiry is not None:
+        return expiry.strftime("%Y-%m")
+    return None
+
+
+def normalize_contract_month_input(contract_month: str | None) -> str | None:
+    """Parse user-provided contract month into YYYY-MM format.
+
+    Accepts: YYYY-MM, YYYYMM, "March 2026", "Mar 2026", etc.
+    Returns None for empty/None input.
+    """
+    if contract_month is None:
+        return None
+
+    raw = contract_month.strip().replace("/", "-").replace(",", " ")
+    if not raw:
+        return None
+
+    compact = " ".join(raw.split())
+    if len(compact) == 7 and compact[4] == "-" and compact[:4].isdigit() and compact[5:7].isdigit():
+        year = int(compact[:4])
+        month = int(compact[5:7])
+        if 1 <= month <= 12:
+            return f"{year:04d}-{month:02d}"
+        raise ValueError("contract_month must use a valid month.")
+
+    if len(compact) == 6 and compact.isdigit():
+        year = int(compact[:4])
+        month = int(compact[4:6])
+        if 1 <= month <= 12:
+            return f"{year:04d}-{month:02d}"
+        raise ValueError("contract_month must use a valid month.")
+
+    for fmt in ("%B %Y", "%b %Y"):
+        try:
+            parsed = dt.datetime.strptime(compact.title(), fmt)
+            return parsed.strftime("%Y-%m")
+        except ValueError:
+            continue
+
+    raise ValueError("contract_month must be YYYY-MM, YYYYMM, or a month name like 'March 2026'.")
+
+
+def display_contract_month(contract_month: str) -> str:
+    """Format YYYY-MM as 'March 2026'."""
+    try:
+        parsed = dt.datetime.strptime(contract_month, "%Y-%m")
+    except ValueError:
+        return contract_month
+    return parsed.strftime("%B %Y")
+
+
 def to_qualified_contract(contract: Contract) -> QualifiedContract:
     raw_expiry = (contract.lastTradeDateOrContractMonth or "").strip()
     return QualifiedContract(

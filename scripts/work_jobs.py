@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -23,7 +24,9 @@ from sqlalchemy.orm import Session
 from src.db import get_engine
 from src.models import Job
 from src.services.jobs import (
+    JOB_TYPE_CONTRACTS_SYNC,
     JOB_TYPE_POSITIONS_SYNC,
+    JOB_TYPE_PRETRADE_CHECK,
     claim_next_job,
     complete_job,
     fail_or_retry_job,
@@ -31,6 +34,8 @@ from src.services.jobs import (
 from src.services.position_sync import check_positions_tables_ready, sync_positions_once
 from src.services.worker_heartbeat import WORKER_TYPE_JOBS, upsert_worker_heartbeat
 from src.utils.env_vars import get_int_env
+
+logger = logging.getLogger("worker:jobs")
 
 
 def load_env(env_name: str) -> None:
@@ -97,15 +102,139 @@ def handle_positions_sync(job: Job, engine: Engine) -> dict:
     }
 
 
+def handle_contracts_sync(job: Job, engine: Engine) -> dict:
+    from ib_async import Contract, Future
+
+    from src.services.contract_sync import sync_contracts
+
+    payload = job.payload or {}
+    host = str(payload.get("host") or "127.0.0.1")
+    port_raw = payload.get("port")
+    client_id_raw = payload.get("client_id")
+
+    if isinstance(port_raw, int):
+        port = port_raw
+    else:
+        port = get_int_env("BROKER_TWS_PORT")
+    if port is None:
+        raise RuntimeError("BROKER_TWS_PORT is not set and no port was provided in job payload.")
+
+    if isinstance(client_id_raw, int):
+        client_id = client_id_raw
+    else:
+        client_id = 32
+
+    # Build contract specs from payload, default to CL futures
+    raw_specs = payload.get("specs")
+    if isinstance(raw_specs, list) and raw_specs:
+        specs = []
+        for raw in raw_specs:
+            if not isinstance(raw, dict):
+                continue
+            sec_type = raw.get("sec_type", "FUT").upper()
+            symbol = raw.get("symbol", "CL")
+            exchange = raw.get("exchange", "")
+            currency = raw.get("currency", "USD")
+
+            if not exchange:
+                raise RuntimeError(
+                    f"No exchange specified for {symbol} {sec_type}. "
+                    "The job payload must include an exchange."
+                )
+
+            if sec_type == "FUT":
+                specs.append(Future(symbol=symbol, exchange=exchange, currency=currency))
+            elif sec_type in ("STK", "OPT"):
+                specs.append(Contract(
+                    symbol=symbol,
+                    secType=sec_type,
+                    exchange="SMART",
+                    currency=currency,
+                ))
+            else:
+                specs.append(Contract(
+                    symbol=symbol,
+                    secType=sec_type,
+                    exchange=exchange,
+                    currency=currency,
+                ))
+        if not specs:
+            specs = [Future("CL", exchange="NYMEX", currency="USD")]
+    else:
+        specs = [Future("CL", exchange="NYMEX", currency="USD")]
+
+    return sync_contracts(
+        engine=engine,
+        host=host,
+        port=port,
+        client_id=client_id,
+        specs=specs,
+    )
+
+
+def handle_pretrade_check(job: Job, engine: Engine) -> dict:
+    from src.services.pretrade_checks import run_pretrade_check
+
+    payload = job.payload or {}
+    con_id = payload.get("con_id")
+    if not isinstance(con_id, int):
+        raise ValueError("pretrade.check job requires integer 'con_id' in payload.")
+
+    side = payload.get("side")
+    if not isinstance(side, str) or side.upper() not in ("BUY", "SELL"):
+        raise ValueError("pretrade.check job requires 'side' (BUY or SELL) in payload.")
+
+    quantity = payload.get("quantity")
+    if not isinstance(quantity, int) or quantity < 1:
+        raise ValueError("pretrade.check job requires positive integer 'quantity' in payload.")
+
+    account_id = payload.get("account_id")
+    if not isinstance(account_id, int):
+        raise ValueError("pretrade.check job requires integer 'account_id' in payload.")
+
+    host = str(payload.get("host") or "127.0.0.1")
+    port_raw = payload.get("port")
+    client_id_raw = payload.get("client_id")
+
+    if isinstance(port_raw, int):
+        port = port_raw
+    else:
+        port = get_int_env("BROKER_TWS_PORT")
+    if port is None:
+        raise RuntimeError("BROKER_TWS_PORT is not set and no port was provided in job payload.")
+
+    if isinstance(client_id_raw, int):
+        client_id = client_id_raw
+    else:
+        client_id = 33
+
+    return run_pretrade_check(
+        engine=engine,
+        host=host,
+        port=port,
+        client_id=client_id,
+        con_id=con_id,
+        side=side.upper(),
+        quantity=quantity,
+        account_id=account_id,
+    )
+
+
 def get_handler(job_type: str) -> Callable[[Job, Engine], dict] | None:
     handlers: dict[str, Callable[[Job, Engine], dict]] = {
         JOB_TYPE_POSITIONS_SYNC: handle_positions_sync,
+        JOB_TYPE_CONTRACTS_SYNC: handle_contracts_sync,
+        JOB_TYPE_PRETRADE_CHECK: handle_pretrade_check,
     }
     return handlers.get(job_type)
 
 
 def main() -> int:
     args = parse_args()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
     load_env(args.env)
     check_db_ready()
 
@@ -137,6 +266,7 @@ def main() -> int:
 
                     handler = get_handler(job.job_type)
                     if handler is None:
+                        logger.warning("job #%d: unsupported job_type '%s'", job_id, job.job_type)
                         fail_or_retry_job(
                             session,
                             job,
@@ -146,11 +276,14 @@ def main() -> int:
                         session.commit()
                         continue
 
+                    logger.info("job #%d: starting %s", job_id, job.job_type)
                     try:
                         result = handler(job, engine)
                         complete_job(session, job, result)
+                        logger.info("job #%d: completed %s", job_id, job.job_type)
                     except Exception as exc:
                         fail_or_retry_job(session, job, str(exc))
+                        logger.error("job #%d: failed %s — %s", job_id, job.job_type, exc)
                     session.commit()
 
             upsert_worker_heartbeat(

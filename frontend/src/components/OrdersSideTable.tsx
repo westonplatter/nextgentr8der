@@ -12,6 +12,7 @@ interface OrderRow {
   created_at: string;
   submitted_at: string | null;
   completed_at: string | null;
+  updated_at: string;
 }
 
 const STATUS_CLASS: Record<string, string> = {
@@ -23,6 +24,7 @@ const STATUS_CLASS: Record<string, string> = {
   rejected: "text-red-700 bg-red-100",
   failed: "text-red-700 bg-red-100",
 };
+const TERMINAL_STATUSES = new Set(["filled", "cancelled", "rejected", "failed"]);
 
 function parseTime(value: string | null): number | null {
   if (!value) return null;
@@ -42,23 +44,30 @@ function formatDuration(ms: number | null): string {
   return `${hours}h ${remMinutes}m`;
 }
 
+function getEndMs(order: OrderRow, nowMs: number): number {
+  const completedMs = parseTime(order.completed_at);
+  if (completedMs !== null) return completedMs;
+  if (TERMINAL_STATUSES.has(order.status)) {
+    return parseTime(order.updated_at) ?? nowMs;
+  }
+  return nowMs;
+}
+
 function computeQueueMs(order: OrderRow, nowMs: number): number {
   const createdMs = parseTime(order.created_at) ?? nowMs;
   const submittedMs = parseTime(order.submitted_at);
-  return (submittedMs ?? nowMs) - createdMs;
+  return (submittedMs ?? getEndMs(order, nowMs)) - createdMs;
 }
 
 function computeRunMs(order: OrderRow, nowMs: number): number | null {
   const submittedMs = parseTime(order.submitted_at);
   if (submittedMs === null) return null;
-  const completedMs = parseTime(order.completed_at);
-  return (completedMs ?? nowMs) - submittedMs;
+  return getEndMs(order, nowMs) - submittedMs;
 }
 
 function computeTotalMs(order: OrderRow, nowMs: number): number {
   const createdMs = parseTime(order.created_at) ?? nowMs;
-  const completedMs = parseTime(order.completed_at);
-  return (completedMs ?? nowMs) - createdMs;
+  return getEndMs(order, nowMs) - createdMs;
 }
 
 export default function OrdersSideTable() {

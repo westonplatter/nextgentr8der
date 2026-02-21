@@ -2,12 +2,57 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, JSON, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class ContractRef(Base):
+    __tablename__ = "contracts"
+    __table_args__ = (
+        Index(
+            "ix_contracts_fut_lookup",
+            "symbol", "sec_type", "is_active", "contract_expiry",
+        ),
+        Index(
+            "ix_contracts_option_lookup",
+            "symbol", "sec_type", "is_active", "strike", "right", "contract_expiry",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    con_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)
+    sec_type: Mapped[str] = mapped_column(String, nullable=False)
+    exchange: Mapped[str] = mapped_column(String, nullable=False)
+    currency: Mapped[str] = mapped_column(String, nullable=False)
+    local_symbol: Mapped[str | None] = mapped_column(String, nullable=True)
+    trading_class: Mapped[str | None] = mapped_column(String, nullable=True)
+    contract_month: Mapped[str | None] = mapped_column(String, nullable=True)
+    contract_expiry: Mapped[str | None] = mapped_column(String, nullable=True)
+    multiplier: Mapped[str | None] = mapped_column(String, nullable=True)
+    strike: Mapped[float | None] = mapped_column(Float, nullable=True)
+    right: Mapped[str | None] = mapped_column(String, nullable=True)
+    primary_exchange: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
 
 
 class Account(Base):

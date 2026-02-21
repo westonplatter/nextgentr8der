@@ -17,6 +17,7 @@ from typing import Any
 from dotenv import load_dotenv
 from ib_async import Contract, IB, MarketOrder, Trade
 from sqlalchemy import inspect, select, update
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from src.db import get_engine
@@ -48,6 +49,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--client-id", type=int, default=30)
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument("--order-timeout-seconds", type=float, default=45.0)
+    parser.add_argument(
+        "--connect-timeout-seconds",
+        type=float,
+        default=20.0,
+        help="Timeout for each TWS/Gateway connect attempt.",
+    )
+    parser.add_argument(
+        "--connect-max-attempts",
+        type=int,
+        default=6,
+        help="Number of connect attempts before exiting.",
+    )
+    parser.add_argument(
+        "--connect-retry-seconds",
+        type=float,
+        default=5.0,
+        help="Delay between connect retries.",
+    )
     parser.add_argument("--once", action="store_true", help="Process one queue pass and exit.")
     return parser.parse_args()
 
@@ -191,6 +210,18 @@ def process_order(
             session.flush()
 
         sync_trade_progress(session, order, trade, event_type="order_final")
+        if not trade.isDone():
+            timeout_message = (
+                f"Order timed out after {timeout_seconds:.1f}s waiting for terminal status; "
+                "marking as failed."
+            )
+            order.status = "failed"
+            order.last_error = timeout_message
+            order.updated_at = now_utc()
+            if order.completed_at is None:
+                order.completed_at = now_utc()
+            append_order_event(session, order, "order_timeout", timeout_message)
+
         if trade.advancedError:
             order.last_error = trade.advancedError
             order.updated_at = now_utc()
@@ -224,6 +255,49 @@ def claim_queued_order_for_submission(session: Session, order_id: int) -> Order 
     return session.get(Order, claimed_order_id)
 
 
+def connect_tws_with_retries(
+    ib: IB,
+    *,
+    engine: Engine,
+    host: str,
+    port: int,
+    client_id: int,
+    timeout_seconds: float,
+    max_attempts: int,
+    retry_seconds: float,
+) -> None:
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            ib.connect(host, port, clientId=client_id, timeout=timeout_seconds)
+            return
+        except TimeoutError:
+            last_exc = RuntimeError(
+                "Timed out connecting to TWS/Gateway "
+                f"(host={host}, port={port}, client_id={client_id}, timeout={timeout_seconds}s)."
+            )
+        except Exception as exc:
+            last_exc = exc
+
+        details = f"connect attempt {attempt}/{max_attempts} failed: {last_exc}"
+        print(details)
+        upsert_worker_heartbeat(
+            engine,
+            WORKER_TYPE_ORDERS,
+            status="starting",
+            details=details,
+        )
+
+        if attempt < max_attempts:
+            time.sleep(retry_seconds)
+
+    assert last_exc is not None
+    raise RuntimeError(
+        f"Unable to connect to TWS/Gateway after {max_attempts} attempt(s). Last error: {last_exc}"
+    ) from last_exc
+
+
 def run_worker(args: argparse.Namespace) -> int:
     port = args.port if args.port is not None else get_int_env("BROKER_TWS_PORT")
     if port is None:
@@ -238,7 +312,32 @@ def run_worker(args: argparse.Namespace) -> int:
     )
 
     try:
-        ib.connect(args.host, port, clientId=args.client_id)
+        try:
+            connect_tws_with_retries(
+                ib,
+                engine=engine,
+                host=args.host,
+                port=port,
+                client_id=args.client_id,
+                timeout_seconds=args.connect_timeout_seconds,
+                max_attempts=args.connect_max_attempts,
+                retry_seconds=args.connect_retry_seconds,
+            )
+        except Exception as exc:
+            message = (
+                "Failed to connect to TWS/Gateway after retries. "
+                "Verify TWS/Gateway is running, API access is enabled, "
+                "and host/port/client-id are correct."
+            )
+            print(message)
+            upsert_worker_heartbeat(
+                engine,
+                WORKER_TYPE_ORDERS,
+                status="error",
+                details=str(exc),
+            )
+            return 1
+
         print(f"Connected to TWS/Gateway at {args.host}:{port}.")
         upsert_worker_heartbeat(
             engine,
@@ -304,6 +403,16 @@ def run_worker(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse_args()
+    if args.poll_seconds <= 0:
+        raise SystemExit("--poll-seconds must be > 0.")
+    if args.order_timeout_seconds <= 0:
+        raise SystemExit("--order-timeout-seconds must be > 0.")
+    if args.connect_timeout_seconds <= 0:
+        raise SystemExit("--connect-timeout-seconds must be > 0.")
+    if args.connect_max_attempts < 1:
+        raise SystemExit("--connect-max-attempts must be >= 1.")
+    if args.connect_retry_seconds < 0:
+        raise SystemExit("--connect-retry-seconds must be >= 0.")
     load_env(args.env)
     check_db_ready()
     return run_worker(args)

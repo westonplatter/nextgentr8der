@@ -1,27 +1,33 @@
+# BOUNDARY: This module must NEVER import ib_async or make direct broker connections.
+# All IB interactions happen through jobs processed by worker:jobs or worker:orders.
+
 """LLM-backed tradebot agent with LangGraph tool workflows."""
 
 from __future__ import annotations
 
-import datetime as dt
+import os
 import json
 from dataclasses import dataclass
 from typing import Any, Sequence, TypedDict
 from urllib import error, request
 
-from ib_async import Contract, Future, IB
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from src.models import Account, Job, Order, OrderEvent, Position
+from src.models import Account, ContractRef, Job, Order, OrderEvent, Position
 from src.services.cl_contracts import (
     DEFAULT_CL_MIN_DAYS_TO_EXPIRY,
-    contract_days_to_expiry,
-    format_contract_month,
-    parse_contract_expiry,
-    to_qualified_contract,
+    display_contract_month,
+    normalize_contract_month_input,
 )
-from src.services.jobs import JOB_TYPE_POSITIONS_SYNC, enqueue_job
+from src.services.contract_lookup import find_contracts, select_contract
+from src.services.jobs import (
+    JOB_TYPE_CONTRACTS_SYNC,
+    JOB_TYPE_POSITIONS_SYNC,
+    JOB_TYPE_PRETRADE_CHECK,
+    enqueue_job,
+)
 from src.services.order_queue import append_order_event, now_utc
 from src.utils.env_vars import get_int_env, get_str_env
 from src.utils.ibkr_account import mask_ibkr_account
@@ -31,18 +37,29 @@ _SYSTEM_PROMPT = (
     "Use tools for factual data access and side effects. "
     "Never fabricate DB data, job IDs, order IDs, fills, or statuses. "
     "When a user asks for current state, call read tools first. "
-    "You can enqueue positions sync jobs and queue CL orders. "
-    "For CL order requests, call preview_cl_order before asking for confirmation. "
-    "If the user specifies a contract month, pass it as tool arg contract_month (YYYY-MM or month name). "
-    "Include contract month and account label in that confirmation message. "
+    "You can enqueue positions sync jobs, contracts sync jobs, and queue orders for any symbol. "
+    "For informational queries about contracts (front month, available months, contract details), use lookup_contract. "
+    "Only use preview_order when the user wants to place/queue a trade. "
+    "Do NOT set run_pretrade_check=true unless the user explicitly asks for margin or pretrade checks. "
+    "For order requests, call preview_order with the symbol, sec_type, side, and quantity. "
+    "For futures (sec_type=FUT), optionally pass contract_month (YYYY-MM or month name). "
+    "For options (sec_type=OPT or FOP), also pass strike and right (C or P). "
+    "For stocks (sec_type=STK), just pass symbol and sec_type. "
+    "Parse natural language descriptions into structured args "
+    "(e.g. 'CL 65 call next Wed' -> symbol=CL, sec_type=FOP, strike=65, right=C, contract_month from 'next Wed'). "
+    "After preview_order, present contract details to the user and confirm before submitting. "
+    "Include contract month and account label in the confirmation message. "
     "If requested month is unavailable, explain that and ask whether to proceed with available month. "
+    "If run_pretrade_check was used, call check_pretrade_job to get margin results before confirming. "
+    "When submitting, pass the con_id, side, quantity, and account_id from the preview_order result. "
+    "If a pretrade_job_id is available, also pass it to submit_order. "
     "Before submitting an order, ensure the user clearly asked to place/queue/submit it. "
     "Keep responses concise and operator-focused."
 )
 _MAX_MESSAGES = 16
 _MAX_TOOL_STEPS = 8
-_DEFAULT_LLM_MODEL = "gpt-4.1-mini"
-_DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
+_DEFAULT_LLM_MODEL = os.getenv("TRADEBOT_LLM_MODEL") or "gpt-5-mini"
+_DEFAULT_LLM_BASE_URL = os.getenv("TRADEBOT_LLM_BASE_URL") or "https://api.openai.com/v1"
 _DEFAULT_TIMEOUT_SECONDS = 45
 _TOOL_SOURCE = "tradebot-llm"
 
@@ -154,17 +171,29 @@ _TOOL_SPECS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "preview_cl_order",
-            "description": "Preview CL order routing details (contract month/account) without queueing an order.",
+            "name": "enqueue_contracts_sync_job",
+            "description": (
+                "Enqueue a contracts.sync job to fetch available contracts from IBKR into the database. "
+                "Pass symbol and sec_type to sync a specific instrument (e.g. NQ FUT, AAPL STK). "
+                "Defaults to CL FUT if not specified."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "side": {"type": "string", "enum": ["BUY", "SELL", "buy", "sell"]},
-                    "quantity": {"type": "integer", "minimum": 1, "maximum": 1000},
-                    "account_ref": {"type": "string"},
-                    "contract_month": {"type": "string"},
+                    "symbol": {"type": "string", "description": "Ticker symbol, e.g. CL, ES, NQ, AAPL"},
+                    "sec_type": {
+                        "type": "string",
+                        "enum": ["FUT", "OPT", "FOP", "STK"],
+                        "description": "Security type to sync",
+                    },
+                    "request_text": {"type": "string"},
+                    "max_attempts": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "default": 3,
+                    },
                 },
-                "required": ["side", "quantity"],
                 "additionalProperties": False,
             },
         },
@@ -172,22 +201,89 @@ _TOOL_SPECS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "submit_cl_order",
+            "name": "lookup_contract",
             "description": (
-                "Queue a live CL futures order for worker:orders. "
+                "Read-only lookup of contract details from the database. "
+                "Use this for informational queries like 'what is the front month for CL?' "
+                "or 'what NQ contracts are available?'. Does NOT start a pretrade check."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Ticker symbol, e.g. CL, ES, NQ, AAPL"},
+                    "sec_type": {"type": "string", "enum": ["FUT", "OPT", "FOP", "STK"]},
+                    "contract_month": {"type": "string", "description": "YYYY-MM or month name like 'March 2026'"},
+                    "strike": {"type": "number", "description": "Strike price for OPT/FOP"},
+                    "right": {"type": "string", "enum": ["C", "P"], "description": "Call or Put for OPT/FOP"},
+                },
+                "required": ["symbol", "sec_type"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "preview_order",
+            "description": (
+                "Preview order routing details (contract/account) from the contracts DB. "
+                "Optionally enqueue a pre-trade margin check job by setting run_pretrade_check=true."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Ticker symbol, e.g. CL, ES, NQ, AAPL"},
+                    "sec_type": {"type": "string", "enum": ["FUT", "OPT", "FOP", "STK"]},
+                    "side": {"type": "string", "enum": ["BUY", "SELL", "buy", "sell"]},
+                    "quantity": {"type": "integer", "minimum": 1, "maximum": 1000},
+                    "account_ref": {"type": "string"},
+                    "contract_month": {"type": "string", "description": "YYYY-MM or month name like 'March 2026'"},
+                    "strike": {"type": "number", "description": "Strike price for OPT/FOP"},
+                    "right": {"type": "string", "enum": ["C", "P"], "description": "Call or Put for OPT/FOP"},
+                    "run_pretrade_check": {"type": "boolean", "default": False, "description": "Set true only if user asks for margin/pretrade check"},
+                },
+                "required": ["symbol", "sec_type", "side", "quantity"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_pretrade_job",
+            "description": "Check the status/result of a pre-trade margin check job.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "integer"},
+                },
+                "required": ["job_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_order",
+            "description": (
+                "Queue a live order for worker:orders. "
+                "Pass con_id, side, quantity, and account_id from preview_order. "
+                "Optionally pass pretrade_job_id if a pretrade check was run. "
                 "This has real trading impact."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "side": {"type": "string", "enum": ["BUY", "SELL", "buy", "sell"]},
+                    "con_id": {"type": "integer", "description": "Contract ID from preview_order"},
+                    "side": {"type": "string", "enum": ["BUY", "SELL"]},
                     "quantity": {"type": "integer", "minimum": 1, "maximum": 1000},
-                    "account_ref": {"type": "string"},
-                    "contract_month": {"type": "string"},
-                    "request_text": {"type": "string"},
+                    "account_id": {"type": "integer", "description": "Account ID from preview_order"},
+                    "pretrade_job_id": {"type": "integer", "description": "Optional pretrade job ID if pretrade check was run"},
                     "operator_confirmed": {"type": "boolean"},
+                    "request_text": {"type": "string"},
                 },
-                "required": ["side", "quantity", "operator_confirmed"],
+                "required": ["con_id", "side", "quantity", "account_id", "operator_confirmed"],
                 "additionalProperties": False,
             },
         },
@@ -207,17 +303,6 @@ class _TradebotModelConfig:
     base_url: str
     model: str
     timeout_seconds: int
-
-
-@dataclass(frozen=True)
-class _ClContractSelection:
-    contract_month: str
-    local_symbol: str | None
-    contract_expiry: str | None
-    con_id: int
-    requested_contract_month: str | None
-    requested_available: bool
-    available_contract_months: tuple[str, ...]
 
 
 class _GraphState(TypedDict):
@@ -304,157 +389,6 @@ def _resolve_account(session: Session, account_ref: str | None) -> Account:
     if account is None:
         raise ValueError(f"Unknown account '{account_ref}'.")
     return account
-
-
-def _normalize_contract_month_input(contract_month: str | None) -> str | None:
-    if contract_month is None:
-        return None
-
-    raw = contract_month.strip().replace("/", "-").replace(",", " ")
-    if not raw:
-        return None
-
-    compact = " ".join(raw.split())
-    if len(compact) == 7 and compact[4] == "-" and compact[:4].isdigit() and compact[5:7].isdigit():
-        year = int(compact[:4])
-        month = int(compact[5:7])
-        if 1 <= month <= 12:
-            return f"{year:04d}-{month:02d}"
-        raise ValueError("contract_month must use a valid month.")
-
-    if len(compact) == 6 and compact.isdigit():
-        year = int(compact[:4])
-        month = int(compact[4:6])
-        if 1 <= month <= 12:
-            return f"{year:04d}-{month:02d}"
-        raise ValueError("contract_month must use a valid month.")
-
-    for fmt in ("%B %Y", "%b %Y"):
-        try:
-            parsed = dt.datetime.strptime(compact.title(), fmt)
-            return parsed.strftime("%Y-%m")
-        except ValueError:
-            continue
-
-    raise ValueError("contract_month must be YYYY-MM, YYYYMM, or a month name like 'March 2026'.")
-
-
-def _display_contract_month(contract_month: str) -> str:
-    try:
-        parsed = dt.datetime.strptime(contract_month, "%Y-%m")
-    except ValueError:
-        return contract_month
-    return parsed.strftime("%B %Y")
-
-
-def _select_cl_contract(
-    ib: IB,
-    requested_contract_month: str | None,
-    min_days_to_expiry: int,
-    allow_fallback: bool,
-) -> _ClContractSelection:
-    contract_details = ib.reqContractDetails(Future("CL", exchange="NYMEX", currency="USD"))
-    if not contract_details:
-        raise RuntimeError("No CL futures contract details returned from IBKR")
-
-    if min_days_to_expiry < 0:
-        raise ValueError("BROKER_CL_MIN_DAYS_TO_EXPIRY must be >= 0.")
-
-    candidates: list[tuple[dt.date, str, Contract]] = []
-    for detail in contract_details:
-        contract = detail.contract
-        if contract is None or contract.secType != "FUT":
-            continue
-
-        expiry = parse_contract_expiry(contract.lastTradeDateOrContractMonth)
-        days_to_expiry = contract_days_to_expiry(contract)
-        contract_month = format_contract_month(contract)
-        if (
-            expiry is None
-            or days_to_expiry is None
-            or days_to_expiry < min_days_to_expiry
-            or contract_month is None
-        ):
-            continue
-
-        candidates.append((expiry, contract_month, contract))
-
-    if not candidates:
-        raise RuntimeError(
-            "No CL futures contracts are available for order placement with the current expiry safety window."
-        )
-
-    candidates.sort(key=lambda item: item[0])
-    contracts_by_month: dict[str, Contract] = {}
-    for _, contract_month, contract in candidates:
-        if contract_month not in contracts_by_month:
-            contracts_by_month[contract_month] = contract
-
-    available_months = tuple(contracts_by_month.keys())
-    requested_available = (
-        requested_contract_month in contracts_by_month
-        if requested_contract_month is not None
-        else True
-    )
-
-    if requested_contract_month and requested_available:
-        selected_month = requested_contract_month
-    elif requested_contract_month and not requested_available:
-        if not allow_fallback:
-            available_text = ", ".join(_display_contract_month(month) for month in available_months)
-            raise ValueError(
-                f"{_display_contract_month(requested_contract_month)} contract is not currently available for "
-                f"order placement. Available contract months: {available_text}."
-            )
-        selected_month = available_months[0]
-    else:
-        selected_month = available_months[0]
-
-    selected_contract = contracts_by_month[selected_month]
-    qualified_contracts = ib.qualifyContracts(selected_contract)
-    if len(qualified_contracts) != 1:
-        raise RuntimeError(
-            f"Expected exactly one qualified CL contract, got {len(qualified_contracts)}"
-        )
-
-    qualified = to_qualified_contract(qualified_contracts[0])
-    return _ClContractSelection(
-        contract_month=qualified.contract_month or selected_month,
-        local_symbol=qualified.local_symbol,
-        contract_expiry=qualified.contract_expiry,
-        con_id=qualified.con_id,
-        requested_contract_month=requested_contract_month,
-        requested_available=requested_available,
-        available_contract_months=available_months,
-    )
-
-
-def _qualify_cl_contract(
-    host: str,
-    port: int,
-    client_id: int,
-    requested_contract_month: str | None = None,
-    allow_fallback: bool = True,
-) -> _ClContractSelection:
-    min_days_to_expiry = get_int_env(
-        "BROKER_CL_MIN_DAYS_TO_EXPIRY", DEFAULT_CL_MIN_DAYS_TO_EXPIRY
-    )
-    if min_days_to_expiry is None:
-        raise ValueError("BROKER_CL_MIN_DAYS_TO_EXPIRY must be set.")
-    normalized_month = _normalize_contract_month_input(requested_contract_month)
-
-    ib = IB()
-    try:
-        ib.connect(host, port, clientId=client_id)
-        return _select_cl_contract(
-            ib=ib,
-            requested_contract_month=normalized_month,
-            min_days_to_expiry=min_days_to_expiry,
-            allow_fallback=allow_fallback,
-        )
-    finally:
-        if ib.isConnected():
-            ib.disconnect()
 
 
 def _tool_list_accounts(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -611,7 +545,166 @@ def _tool_enqueue_positions_sync_job(session: Session, latest_user_text: str, ar
     }
 
 
-def _tool_submit_cl_order(session: Session, latest_user_text: str, args: dict[str, Any]) -> dict[str, Any]:
+_FUTURES_EXCHANGE_MAP: dict[str, str] = {
+    "CL": "NYMEX",
+    "MCL": "NYMEX",
+    "NG": "NYMEX",
+    "HO": "NYMEX",
+    "RB": "NYMEX",
+    "ES": "CME",
+    "MES": "CME",
+    "NQ": "CME",
+    "MNQ": "CME",
+    "RTY": "CME",
+    "M2K": "CME",
+    "YM": "CBOT",
+    "MYM": "CBOT",
+    "ZB": "CBOT",
+    "ZN": "CBOT",
+    "ZF": "CBOT",
+    "ZT": "CBOT",
+    "ZC": "CBOT",
+    "ZS": "CBOT",
+    "ZW": "CBOT",
+    "GC": "COMEX",
+    "MGC": "COMEX",
+    "SI": "COMEX",
+    "SIL": "COMEX",
+    "HG": "COMEX",
+}
+
+
+def _resolve_exchange(symbol: str, sec_type: str) -> str:
+    """Resolve exchange for a symbol. Returns exchange or raises if unknown futures symbol."""
+    if sec_type in ("FUT", "FOP"):
+        exchange = _FUTURES_EXCHANGE_MAP.get(symbol)
+        if exchange is None:
+            known = ", ".join(sorted(_FUTURES_EXCHANGE_MAP.keys()))
+            raise ValueError(
+                f"Unknown exchange for futures symbol '{symbol}'. "
+                f"Known symbols: {known}. "
+                f"Please tell me which exchange this trades on."
+            )
+        return exchange
+    if sec_type == "OPT":
+        return "SMART"
+    # STK
+    return "SMART"
+
+
+def _tool_enqueue_contracts_sync_job(session: Session, latest_user_text: str, args: dict[str, Any]) -> dict[str, Any]:
+    max_attempts = _coerce_int_arg(args, "max_attempts", 3, 1, 10)
+    request_text = _coerce_optional_str_arg(args, "request_text") or latest_user_text
+
+    symbol = _coerce_optional_str_arg(args, "symbol")
+    sec_type = _coerce_optional_str_arg(args, "sec_type")
+
+    payload: dict[str, Any] = {}
+    if symbol is not None or sec_type is not None:
+        sym = (symbol or "CL").upper()
+        st = (sec_type or "FUT").upper()
+        exchange = _resolve_exchange(sym, st)
+        payload["specs"] = [{"symbol": sym, "sec_type": st, "exchange": exchange}]
+
+    job = enqueue_job(
+        session=session,
+        job_type=JOB_TYPE_CONTRACTS_SYNC,
+        payload=payload,
+        source=_TOOL_SOURCE,
+        request_text=request_text,
+        max_attempts=max_attempts,
+    )
+    session.commit()
+    return {
+        "job_id": job.id,
+        "job_type": job.job_type,
+        "status": job.status,
+        "max_attempts": job.max_attempts,
+    }
+
+
+def _tool_lookup_contract(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
+    symbol_raw = args.get("symbol")
+    if not isinstance(symbol_raw, str) or not symbol_raw.strip():
+        raise ValueError("'symbol' must be a non-empty string.")
+    symbol = symbol_raw.strip().upper()
+
+    sec_type_raw = args.get("sec_type")
+    if not isinstance(sec_type_raw, str) or not sec_type_raw.strip():
+        raise ValueError("'sec_type' must be a non-empty string.")
+    sec_type = sec_type_raw.strip().upper()
+
+    requested_contract_month_raw = _coerce_optional_str_arg(args, "contract_month")
+    requested_contract_month = normalize_contract_month_input(requested_contract_month_raw)
+
+    strike_raw = args.get("strike")
+    strike = float(strike_raw) if strike_raw is not None else None
+    right = _coerce_optional_str_arg(args, "right")
+    if right is not None:
+        right = right.upper()
+
+    min_days_to_expiry = get_int_env("BROKER_CL_MIN_DAYS_TO_EXPIRY", DEFAULT_CL_MIN_DAYS_TO_EXPIRY)
+
+    contracts = find_contracts(
+        session=session,
+        symbol=symbol,
+        sec_type=sec_type,
+        contract_month=requested_contract_month,
+        min_days_to_expiry=min_days_to_expiry,
+        strike=strike,
+        right=right,
+    )
+
+    # Group by month for summary
+    months: dict[str, dict[str, Any]] = {}
+    for c in contracts:
+        month = c.get("contract_month") or "unknown"
+        if month not in months:
+            months[month] = {
+                "contract_month": month,
+                "contract_month_display": display_contract_month(month) if month != "unknown" else "unknown",
+                "con_id": c["con_id"],
+                "local_symbol": c["local_symbol"],
+                "exchange": c["exchange"],
+                "contract_expiry": c["contract_expiry"],
+                "days_to_expiry": c["days_to_expiry"],
+                "trading_class": c["trading_class"],
+                "multiplier": c["multiplier"],
+            }
+
+    front_month = contracts[0] if contracts else None
+
+    return {
+        "symbol": symbol,
+        "sec_type": sec_type,
+        "total_contracts": len(contracts),
+        "available_months": [
+            months[m] for m in months
+        ],
+        "front_month": {
+            "contract_month": front_month["contract_month"],
+            "contract_month_display": display_contract_month(front_month["contract_month"]) if front_month.get("contract_month") else "unknown",
+            "con_id": front_month["con_id"],
+            "local_symbol": front_month["local_symbol"],
+            "contract_expiry": front_month["contract_expiry"],
+            "days_to_expiry": front_month["days_to_expiry"],
+        } if front_month else None,
+    }
+
+
+def _tool_preview_order(session: Session, latest_user_text: str, args: dict[str, Any]) -> dict[str, Any]:
+    symbol_raw = args.get("symbol")
+    if not isinstance(symbol_raw, str) or not symbol_raw.strip():
+        raise ValueError("'symbol' must be a non-empty string.")
+    symbol = symbol_raw.strip().upper()
+
+    sec_type_raw = args.get("sec_type")
+    if not isinstance(sec_type_raw, str) or not sec_type_raw.strip():
+        raise ValueError("'sec_type' must be a non-empty string.")
+    sec_type = sec_type_raw.strip().upper()
+    if sec_type not in {"FUT", "OPT", "FOP", "STK"}:
+        raise ValueError("'sec_type' must be one of FUT, OPT, FOP, STK.")
+
     side_raw = args.get("side")
     if not isinstance(side_raw, str):
         raise ValueError("'side' must be a string.")
@@ -620,47 +713,239 @@ def _tool_submit_cl_order(session: Session, latest_user_text: str, args: dict[st
         raise ValueError("'side' must be BUY or SELL.")
 
     quantity = _coerce_int_arg(args, "quantity", 1, 1, 1000)
+    account_ref = _coerce_optional_str_arg(args, "account_ref")
+    requested_contract_month_raw = _coerce_optional_str_arg(args, "contract_month")
+    requested_contract_month = normalize_contract_month_input(requested_contract_month_raw)
+
+    strike_raw = args.get("strike")
+    strike = float(strike_raw) if strike_raw is not None else None
+    right = _coerce_optional_str_arg(args, "right")
+    if right is not None:
+        right = right.upper()
+        if right not in {"C", "P"}:
+            raise ValueError("'right' must be 'C' or 'P'.")
+
+    account = _resolve_account(session, account_ref)
+
+    min_days_to_expiry = get_int_env("BROKER_CL_MIN_DAYS_TO_EXPIRY", DEFAULT_CL_MIN_DAYS_TO_EXPIRY)
+
+    selected = select_contract(
+        session=session,
+        symbol=symbol,
+        sec_type=sec_type,
+        contract_month=requested_contract_month,
+        min_days_to_expiry=min_days_to_expiry,
+        strike=strike,
+        right=right,
+        allow_fallback=True,
+    )
+
+    run_pretrade_check = _coerce_bool_arg(args, "run_pretrade_check", False)
+
+    pretrade_job_id = None
+    pretrade_job_status = None
+    if run_pretrade_check:
+        job = enqueue_job(
+            session=session,
+            job_type=JOB_TYPE_PRETRADE_CHECK,
+            payload={
+                "con_id": selected["con_id"],
+                "side": side,
+                "quantity": quantity,
+                "account_id": account.id,
+            },
+            source=_TOOL_SOURCE,
+            request_text=latest_user_text,
+        )
+        pretrade_job_id = job.id
+        pretrade_job_status = job.status
+
+    session.commit()
+
+    account_label = account.alias or mask_ibkr_account(account.account)
+    available_account_count = session.execute(select(func.count(Account.id))).scalar_one()
+    selected_month = selected["contract_month"] or "unknown"
+    selected_month_display = display_contract_month(selected_month) if selected_month != "unknown" else "unknown"
+    requested_month_display = (
+        display_contract_month(selected["requested_contract_month"])
+        if selected["requested_contract_month"] is not None
+        else None
+    )
+
+    quantity_label = "contract" if quantity == 1 else "contracts"
+    action_label = "buying" if side == "BUY" else "selling"
+    account_intro = (
+        f"You have one brokerage account available: {account_label}."
+        if available_account_count == 1
+        else f"The selected brokerage account is {account_label}."
+    )
+
+    unavailable_response_text = None
+    if (
+        selected["requested_contract_month"] is not None
+        and not selected["requested_available"]
+        and requested_month_display is not None
+    ):
+        unavailable_response_text = (
+            f"The available {symbol} contract month for {action_label} {quantity} {quantity_label} is "
+            f"{selected_month_display} on the {account_label} account. "
+            f"{requested_month_display} contract is not currently available for order placement. "
+            f"Would you like to proceed with the {selected_month_display} contract instead?"
+        )
+
+    result: dict[str, Any] = {
+        "side": side,
+        "quantity": quantity,
+        "symbol": symbol,
+        "sec_type": sec_type,
+        "account_id": account.id,
+        "account": account_label,
+        "contract_month": selected["contract_month"],
+        "contract_month_display": selected_month_display,
+        "contract_expiry": selected["contract_expiry"],
+        "local_symbol": selected["local_symbol"],
+        "con_id": selected["con_id"],
+        "days_to_expiry": selected["days_to_expiry"],
+        "strike": selected.get("strike"),
+        "right": selected.get("right"),
+        "requested_contract_month": selected["requested_contract_month"],
+        "requested_contract_month_display": requested_month_display,
+        "requested_available": selected["requested_available"],
+        "available_contract_months": selected["available_contract_months"],
+        "available_contract_months_display": [
+            display_contract_month(month)
+            for month in selected["available_contract_months"]
+        ],
+        "unavailable_response_text": unavailable_response_text,
+        "confirmation_text": (
+            f"{account_intro} "
+            f"The {symbol} {sec_type} contract to trade is {selected_month_display}."
+        ),
+    }
+
+    if pretrade_job_id is not None:
+        result["pretrade_job_id"] = pretrade_job_id
+        result["pretrade_job_status"] = pretrade_job_status
+        result["message"] = (
+            f"Running pre-trade margin check (job #{pretrade_job_id}). "
+            f"Call check_pretrade_job to see results."
+        )
+
+    return result
+
+
+_PRETRADE_POLL_INTERVAL = 2
+_PRETRADE_POLL_MAX_SECONDS = 25
+
+
+def _tool_check_pretrade_job(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
+    import time
+
+    job_id = args.get("job_id")
+    if not isinstance(job_id, int):
+        raise ValueError("'job_id' must be an integer.")
+
+    job = session.get(Job, job_id)
+    if job is None:
+        raise ValueError(f"Job #{job_id} not found.")
+
+    if job.job_type != JOB_TYPE_PRETRADE_CHECK:
+        raise ValueError(f"Job #{job_id} is not a pretrade check job (type: {job.job_type}).")
+
+    # Poll until the job finishes or we hit the timeout
+    waited = 0.0
+    while job.status not in ("completed", "failed") and waited < _PRETRADE_POLL_MAX_SECONDS:
+        time.sleep(_PRETRADE_POLL_INTERVAL)
+        waited += _PRETRADE_POLL_INTERVAL
+        session.expire(job)
+
+    if job.status == "completed":
+        return {
+            "job_id": job.id,
+            "status": job.status,
+            "result": job.result,
+        }
+    elif job.status == "failed":
+        return {
+            "job_id": job.id,
+            "status": job.status,
+            "last_error": job.last_error,
+            "attempts": job.attempts,
+            "max_attempts": job.max_attempts,
+        }
+    else:
+        return {
+            "job_id": job.id,
+            "status": job.status,
+            "message": f"Pre-trade check is still running after {int(waited)}s. Call check_pretrade_job again.",
+        }
+
+
+def _tool_submit_order(session: Session, latest_user_text: str, args: dict[str, Any]) -> dict[str, Any]:
     operator_confirmed = _coerce_bool_arg(args, "operator_confirmed", False)
     if not operator_confirmed:
         raise ValueError("Order submission requires operator_confirmed=true.")
 
-    account_ref = _coerce_optional_str_arg(args, "account_ref")
-    requested_contract_month = _coerce_optional_str_arg(args, "contract_month")
     request_text = _coerce_optional_str_arg(args, "request_text") or latest_user_text
-    account = _resolve_account(session, account_ref)
+    pretrade_job_id = args.get("pretrade_job_id")
 
-    host = "127.0.0.1"
-    port = get_int_env("BROKER_TWS_PORT")
-    if port is None:
-        raise ValueError("Configuration error: BROKER_TWS_PORT is not set.")
-    client_id = get_int_env("TRADEBOT_QUALIFY_CLIENT_ID", 29)
+    # If pretrade job provided, pull contract info from it
+    if isinstance(pretrade_job_id, int):
+        job = session.get(Job, pretrade_job_id)
+        if job is None:
+            raise ValueError(f"Job #{pretrade_job_id} not found.")
+        if job.job_type != JOB_TYPE_PRETRADE_CHECK:
+            raise ValueError(f"Job #{pretrade_job_id} is not a pretrade check job.")
+        if job.status != "completed":
+            raise ValueError(f"Pretrade job #{pretrade_job_id} is not completed (status: {job.status}).")
+        if not job.result:
+            raise ValueError(f"Pretrade job #{pretrade_job_id} has no result data.")
 
-    selected_contract = _qualify_cl_contract(
-        host=host,
-        port=port,
-        client_id=client_id,
-        requested_contract_month=requested_contract_month,
-        allow_fallback=False,
-    )
+    # Get order params — from args (direct from preview_order)
+    con_id = args.get("con_id")
+    if not isinstance(con_id, int):
+        raise ValueError("'con_id' must be an integer.")
+
+    side_raw = args.get("side")
+    if not isinstance(side_raw, str) or side_raw.upper() not in ("BUY", "SELL"):
+        raise ValueError("'side' must be BUY or SELL.")
+    side = side_raw.upper()
+
+    quantity = _coerce_int_arg(args, "quantity", 1, 1, 1000)
+
+    account_id = args.get("account_id")
+    if not isinstance(account_id, int):
+        raise ValueError("'account_id' must be an integer.")
+
+    account = session.get(Account, account_id)
+    if account is None:
+        raise ValueError(f"Account #{account_id} not found.")
+
+    # Look up contract details from the contracts table
+    contract_ref = session.execute(
+        select(ContractRef).where(ContractRef.con_id == con_id)
+    ).scalars().first()
+    if contract_ref is None:
+        raise ValueError(f"Contract with con_id={con_id} not found in database.")
 
     created_at = now_utc()
     order = Order(
         account_id=account.id,
-        symbol="CL",
-        sec_type="FUT",
-        exchange="NYMEX",
-        currency="USD",
+        symbol=contract_ref.symbol,
+        sec_type=contract_ref.sec_type,
+        exchange=contract_ref.exchange,
+        currency=contract_ref.currency,
         side=side,
         quantity=quantity,
         order_type="MKT",
         tif="DAY",
         status="queued",
         source=_TOOL_SOURCE,
-        con_id=selected_contract.con_id,
-        local_symbol=selected_contract.local_symbol,
-        trading_class="CL",
-        contract_month=selected_contract.contract_month,
-        contract_expiry=selected_contract.contract_expiry,
+        con_id=con_id,
+        local_symbol=contract_ref.local_symbol,
+        trading_class=contract_ref.trading_class,
+        contract_month=contract_ref.contract_month,
+        contract_expiry=contract_ref.contract_expiry,
         request_text=request_text,
         created_at=created_at,
         updated_at=created_at,
@@ -668,14 +953,16 @@ def _tool_submit_cl_order(session: Session, latest_user_text: str, args: dict[st
     session.add(order)
     session.flush()
 
+    pretrade_label = f", pretrade_job={pretrade_job_id}" if pretrade_job_id else ""
     append_order_event(
         session,
         order,
         event_type="order_created",
         message=(
-            f"Queued by tradebot-llm for {side} {quantity} CL "
-            f"({selected_contract.contract_month}, conId={selected_contract.con_id}, "
-            f"account={mask_ibkr_account(account.account)})."
+            f"Queued by tradebot-llm for {side} {quantity} {contract_ref.symbol} "
+            f"({contract_ref.contract_month}, conId={con_id}, "
+            f"account={mask_ibkr_account(account.account)}"
+            f"{pretrade_label})."
         ),
     )
     session.commit()
@@ -687,98 +974,15 @@ def _tool_submit_cl_order(session: Session, latest_user_text: str, args: dict[st
         "side": order.side,
         "quantity": order.quantity,
         "symbol": order.symbol,
-        "contract_month": order.contract_month,
+        "contract_month": contract_ref.contract_month,
         "contract_month_display": (
-            _display_contract_month(order.contract_month)
-            if order.contract_month is not None
+            display_contract_month(contract_ref.contract_month)
+            if contract_ref.contract_month is not None
             else None
         ),
         "account": account_label,
+        "pretrade_job_id": pretrade_job_id,
         "worker_handoff": "worker:orders",
-    }
-
-
-def _tool_preview_cl_order(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
-    side_raw = args.get("side")
-    if not isinstance(side_raw, str):
-        raise ValueError("'side' must be a string.")
-    side = side_raw.strip().upper()
-    if side not in {"BUY", "SELL"}:
-        raise ValueError("'side' must be BUY or SELL.")
-
-    quantity = _coerce_int_arg(args, "quantity", 1, 1, 1000)
-    account_ref = _coerce_optional_str_arg(args, "account_ref")
-    requested_contract_month = _coerce_optional_str_arg(args, "contract_month")
-    account = _resolve_account(session, account_ref)
-
-    host = "127.0.0.1"
-    port = get_int_env("BROKER_TWS_PORT")
-    if port is None:
-        raise ValueError("Configuration error: BROKER_TWS_PORT is not set.")
-    client_id = get_int_env("TRADEBOT_QUALIFY_CLIENT_ID", 29)
-
-    selected_contract = _qualify_cl_contract(
-        host=host,
-        port=port,
-        client_id=client_id,
-        requested_contract_month=requested_contract_month,
-        allow_fallback=True,
-    )
-
-    account_label = account.alias or mask_ibkr_account(account.account)
-    available_account_count = session.execute(select(func.count(Account.id))).scalar_one()
-    selected_month_display = _display_contract_month(selected_contract.contract_month)
-    requested_month_display = (
-        _display_contract_month(selected_contract.requested_contract_month)
-        if selected_contract.requested_contract_month is not None
-        else None
-    )
-    quantity_label = "contract" if quantity == 1 else "contracts"
-    action_label = "buying" if side == "BUY" else "selling"
-    account_intro = (
-        f"You have one brokerage account available: {account_label}."
-        if available_account_count == 1
-        else f"The selected brokerage account is {account_label}."
-    )
-    unavailable_response_text = None
-    if (
-        selected_contract.requested_contract_month is not None
-        and not selected_contract.requested_available
-        and requested_month_display is not None
-    ):
-        unavailable_response_text = (
-            f"The available CL contract month for {action_label} {quantity} {quantity_label} is "
-            f"{selected_month_display} on the {account_label} account. "
-            f"{requested_month_display} contract is not currently available for order placement. "
-            f"Would you like to proceed with the {selected_month_display} contract instead?"
-        )
-
-    return {
-        "side": side,
-        "quantity": quantity,
-        "symbol": "CL",
-        "account_id": account.id,
-        "account": account_label,
-        "contract_month": selected_contract.contract_month,
-        "contract_month_display": selected_month_display,
-        "contract_expiry": selected_contract.contract_expiry,
-        "local_symbol": selected_contract.local_symbol,
-        "con_id": selected_contract.con_id,
-        "requested_contract_month": selected_contract.requested_contract_month,
-        "requested_contract_month_display": requested_month_display,
-        "requested_available": selected_contract.requested_available,
-        "available_contract_months": list(selected_contract.available_contract_months),
-        "available_contract_months_display": [
-            _display_contract_month(month)
-            for month in selected_contract.available_contract_months
-        ],
-        "unavailable_response_text": unavailable_response_text,
-        "confirmation_text": (
-            f"{account_intro} "
-            f"The CL contract month to trade is {selected_month_display}. "
-            f"Please confirm you want to {side.lower()} {quantity} CL contract"
-            f"{'' if quantity == 1 else 's'} on this account, and I will submit the order."
-        ),
     }
 
 
@@ -788,8 +992,11 @@ _TOOL_HANDLERS = {
     "list_jobs": _tool_list_jobs,
     "list_orders": _tool_list_orders,
     "enqueue_positions_sync_job": _tool_enqueue_positions_sync_job,
-    "preview_cl_order": _tool_preview_cl_order,
-    "submit_cl_order": _tool_submit_cl_order,
+    "enqueue_contracts_sync_job": _tool_enqueue_contracts_sync_job,
+    "lookup_contract": _tool_lookup_contract,
+    "preview_order": _tool_preview_order,
+    "check_pretrade_job": _tool_check_pretrade_job,
+    "submit_order": _tool_submit_order,
 }
 
 
@@ -819,7 +1026,6 @@ def _call_llm(
         "tools": _TOOL_SPECS,
         "tool_choice": "auto",
         "parallel_tool_calls": False,
-        "temperature": 0.1,
     }
 
     endpoint = f"{config.base_url}/chat/completions"

@@ -44,7 +44,7 @@ export default function TradebotChat() {
                 ],
               };
             })
-            .filter((message): message is { role: string; parts: { type: "text"; text: string }[] } => Boolean(message));
+            .filter((message): message is Exclude<typeof message, null> => message !== null);
           return {
             body: {
               id,
@@ -63,8 +63,11 @@ export default function TradebotChat() {
   const submit = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    await sendMessage({ text: trimmed });
-    setInput("");
+    try {
+      await sendMessage({ text: trimmed });
+    } finally {
+      setInput("");
+    }
   };
 
   return (

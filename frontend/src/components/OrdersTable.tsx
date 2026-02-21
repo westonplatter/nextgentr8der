@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface Order {
   id: number;
@@ -40,6 +40,44 @@ export default function OrdersTable() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actioning, setActioning] = useState<Set<number>>(new Set());
+
+  const orderedRows = useMemo(() => {
+    const sorted = [...orders].sort((a, b) => {
+      const aMs = Date.parse(a.created_at);
+      const bMs = Date.parse(b.created_at);
+      if (Number.isNaN(aMs) && Number.isNaN(bMs)) return b.id - a.id;
+      if (Number.isNaN(aMs)) return 1;
+      if (Number.isNaN(bMs)) return -1;
+      return bMs - aMs;
+    });
+
+    const rows: Array<{ kind: "group"; key: string; label: string } | { kind: "order"; order: Order }> = [];
+    let currentGroupKey = "";
+    for (const order of sorted) {
+      const createdDate = new Date(order.created_at);
+      const groupKey = Number.isNaN(createdDate.getTime())
+        ? "Unknown date"
+        : `${createdDate.getFullYear()}-${String(createdDate.getMonth() + 1).padStart(2, "0")}-${String(createdDate.getDate()).padStart(2, "0")}`;
+      if (groupKey !== currentGroupKey) {
+        currentGroupKey = groupKey;
+        rows.push({
+          kind: "group",
+          key: groupKey,
+          label:
+            groupKey === "Unknown date"
+              ? "Unknown date"
+              : createdDate.toLocaleDateString(undefined, {
+                  weekday: "short",
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                }),
+        });
+      }
+      rows.push({ kind: "order", order });
+    }
+    return rows;
+  }, [orders]);
 
   useEffect(() => {
     let active = true;
@@ -114,26 +152,34 @@ export default function OrdersTable() {
           </tr>
         </thead>
         <tbody>
-          {orders.map((order) => (
-            <tr key={order.id} className="border-b border-gray-200 hover:bg-gray-50">
-              {COLUMNS.map((col) => (
-                <td key={col.key} className="px-3 py-2 whitespace-nowrap">
-                  {order[col.key] ?? "—"}
+          {orderedRows.map((row) =>
+            row.kind === "group" ? (
+              <tr key={`group-${row.key}`} className="bg-gray-50">
+                <td className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-600" colSpan={COLUMNS.length + 1}>
+                  {row.label}
                 </td>
-              ))}
-              <td className="px-3 py-2 whitespace-nowrap">
-                {order.status === "queued" && (
-                  <button
-                    onClick={() => cancelOrder(order.id)}
-                    disabled={actioning.has(order.id)}
-                    className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
+              </tr>
+            ) : (
+              <tr key={row.order.id} className="border-b border-gray-200 hover:bg-gray-50">
+                {COLUMNS.map((col) => (
+                  <td key={col.key} className="px-3 py-2 whitespace-nowrap">
+                    {row.order[col.key] ?? "—"}
+                  </td>
+                ))}
+                <td className="px-3 py-2 whitespace-nowrap">
+                  {row.order.status === "queued" && (
+                    <button
+                      onClick={() => cancelOrder(row.order.id)}
+                      disabled={actioning.has(row.order.id)}
+                      className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ),
+          )}
         </tbody>
       </table>
     </div>

@@ -15,6 +15,8 @@ JOB_STATUS_COMPLETED = "completed"
 JOB_STATUS_FAILED = "failed"
 
 JOB_TYPE_POSITIONS_SYNC = "positions.sync"
+JOB_TYPE_CONTRACTS_SYNC = "contracts.sync"
+JOB_TYPE_PRETRADE_CHECK = "pretrade.check"
 
 
 def now_utc() -> datetime:

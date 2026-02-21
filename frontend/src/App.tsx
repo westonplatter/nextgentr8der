@@ -1,53 +1,53 @@
-import { useState } from "react";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import AccountsTable from "./components/AccountsTable";
 import OrdersTable from "./components/OrdersTable";
 import PositionsTable from "./components/PositionsTable";
 import TradebotChat from "./components/TradebotChat";
 import WorkerStatusLights from "./components/WorkerStatusLights";
 
-type Page = "positions" | "accounts" | "orders" | "tradebot";
+const NAV_ITEMS = [
+  { label: "Accounts", path: "/accounts" },
+  { label: "Positions", path: "/positions" },
+  { label: "Orders", path: "/orders" },
+  { label: "Tradebot", path: "/tradebot" },
+] as const;
 
 function App() {
-  const [page, setPage] = useState<Page>("tradebot");
-  const horizontalPaddingClass = page === "tradebot" ? "px-2 md:px-3" : "px-6";
+  const location = useLocation();
+  const isTradebotPage = location.pathname === "/tradebot";
+  const horizontalPaddingClass = isTradebotPage ? "px-2 md:px-3" : "px-6";
+  const contentClass = isTradebotPage
+    ? `${horizontalPaddingClass} py-3 flex-1 min-h-0 overflow-y-auto lg:overflow-hidden`
+    : `${horizontalPaddingClass} py-6`;
 
   return (
-    <div className="w-full">
+    <div className="w-full min-h-screen flex flex-col">
       <nav
         className={`flex items-center gap-6 ${horizontalPaddingClass} py-3 border-b border-gray-200 bg-white`}
       >
         <span className="font-bold text-lg">ngtrader</span>
-        <button
-          onClick={() => setPage("positions")}
-          className={`text-sm ${page === "positions" ? "text-black font-semibold" : "text-gray-500 hover:text-gray-800"}`}
-        >
-          Positions
-        </button>
-        <button
-          onClick={() => setPage("accounts")}
-          className={`text-sm ${page === "accounts" ? "text-black font-semibold" : "text-gray-500 hover:text-gray-800"}`}
-        >
-          Accounts
-        </button>
-        <button
-          onClick={() => setPage("orders")}
-          className={`text-sm ${page === "orders" ? "text-black font-semibold" : "text-gray-500 hover:text-gray-800"}`}
-        >
-          Orders
-        </button>
-        <button
-          onClick={() => setPage("tradebot")}
-          className={`text-sm ${page === "tradebot" ? "text-black font-semibold" : "text-gray-500 hover:text-gray-800"}`}
-        >
-          Tradebot
-        </button>
+        {NAV_ITEMS.map((item) => (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            className={({ isActive }) =>
+              `text-sm ${isActive ? "text-black font-semibold" : "text-gray-500 hover:text-gray-800"}`
+            }
+          >
+            {item.label}
+          </NavLink>
+        ))}
         <WorkerStatusLights />
       </nav>
-      <div className={`${horizontalPaddingClass} py-6`}>
-        {page === "positions" && <PositionsTable />}
-        {page === "accounts" && <AccountsTable />}
-        {page === "orders" && <OrdersTable />}
-        {page === "tradebot" && <TradebotChat />}
+      <div className={contentClass}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/tradebot" replace />} />
+          <Route path="/positions" element={<PositionsTable />} />
+          <Route path="/accounts" element={<AccountsTable />} />
+          <Route path="/orders" element={<OrdersTable />} />
+          <Route path="/tradebot" element={<TradebotChat />} />
+          <Route path="*" element={<Navigate to="/tradebot" replace />} />
+        </Routes>
       </div>
     </div>
   );

@@ -5,12 +5,14 @@ interface OrderRow {
   symbol: string;
   side: string;
   quantity: number;
+  contract_month: string | null;
   status: string;
   filled_quantity: number;
   avg_fill_price: number | null;
   created_at: string;
   submitted_at: string | null;
   completed_at: string | null;
+  updated_at: string;
 }
 
 const STATUS_CLASS: Record<string, string> = {
@@ -22,6 +24,7 @@ const STATUS_CLASS: Record<string, string> = {
   rejected: "text-red-700 bg-red-100",
   failed: "text-red-700 bg-red-100",
 };
+const TERMINAL_STATUSES = new Set(["filled", "cancelled", "rejected", "failed"]);
 
 function parseTime(value: string | null): number | null {
   if (!value) return null;
@@ -41,23 +44,30 @@ function formatDuration(ms: number | null): string {
   return `${hours}h ${remMinutes}m`;
 }
 
+function getEndMs(order: OrderRow, nowMs: number): number {
+  const completedMs = parseTime(order.completed_at);
+  if (completedMs !== null) return completedMs;
+  if (TERMINAL_STATUSES.has(order.status)) {
+    return parseTime(order.updated_at) ?? nowMs;
+  }
+  return nowMs;
+}
+
 function computeQueueMs(order: OrderRow, nowMs: number): number {
   const createdMs = parseTime(order.created_at) ?? nowMs;
   const submittedMs = parseTime(order.submitted_at);
-  return (submittedMs ?? nowMs) - createdMs;
+  return (submittedMs ?? getEndMs(order, nowMs)) - createdMs;
 }
 
 function computeRunMs(order: OrderRow, nowMs: number): number | null {
   const submittedMs = parseTime(order.submitted_at);
   if (submittedMs === null) return null;
-  const completedMs = parseTime(order.completed_at);
-  return (completedMs ?? nowMs) - submittedMs;
+  return getEndMs(order, nowMs) - submittedMs;
 }
 
 function computeTotalMs(order: OrderRow, nowMs: number): number {
   const createdMs = parseTime(order.created_at) ?? nowMs;
-  const completedMs = parseTime(order.completed_at);
-  return (completedMs ?? nowMs) - createdMs;
+  return getEndMs(order, nowMs) - createdMs;
 }
 
 export default function OrdersSideTable() {
@@ -136,7 +146,7 @@ export default function OrdersSideTable() {
   };
 
   return (
-    <div className="min-w-0 h-[460px] rounded border border-gray-300 bg-white p-3 flex flex-col">
+    <div className="min-w-0 h-full min-h-0 rounded border border-gray-300 bg-white p-3 flex flex-col">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-900">Orders</h3>
         <span className="text-xs text-gray-500">Auto-refresh 2.5s</span>
@@ -170,6 +180,7 @@ export default function OrdersSideTable() {
                 <td className="px-2 py-1 font-mono text-gray-800">{order.id}</td>
                 <td className="px-2 py-1 text-gray-700">
                   {order.side} {order.quantity} {order.symbol}
+                  {order.contract_month ? ` ${order.contract_month}` : ""}
                 </td>
                 <td className="px-2 py-1">
                   <span

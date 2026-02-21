@@ -12,16 +12,22 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import math
 import os
 import time
 
 from dotenv import load_dotenv
-from ib_async import Contract, IB, MarketOrder, Order, OrderState, Ticker, Trade
+from ib_async import IB, MarketOrder, Trade
 
 from src.services.cl_contracts import (
+    DEFAULT_CL_MIN_DAYS_TO_EXPIRY,
     format_contract_month,
     select_front_month_contract,
+)
+from src.services.pretrade_checks import (
+    get_current_margin,
+    get_reference_price,
+    get_what_if_margin,
+    parse_float,
 )
 from src.utils.env_vars import get_int_env
 from src.utils.ibkr_account import mask_ibkr_account
@@ -75,18 +81,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def parse_float(value: str | float | int | None) -> float | None:
-    if value is None:
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(parsed) or abs(parsed) > 1e307:
-        return None
-    return parsed
-
-
 def format_money(value: float | None) -> str:
     if value is None:
         return "N/A"
@@ -105,35 +99,6 @@ def choose_account(ib: IB, requested_account: str | None) -> str:
     if not accounts:
         raise RuntimeError("No managed accounts found from IBKR session")
     return accounts[0]
-
-
-def get_current_margin(ib: IB, account: str) -> tuple[float | None, float | None]:
-    init_margin: float | None = None
-    maint_margin: float | None = None
-    for value in ib.accountSummary(account):
-        if value.tag == "InitMarginReq":
-            init_margin = parse_float(value.value)
-        elif value.tag == "MaintMarginReq":
-            maint_margin = parse_float(value.value)
-    return init_margin, maint_margin
-
-
-def get_reference_price(ticker: Ticker) -> float | None:
-    for price_candidate in (ticker.marketPrice(), ticker.last, ticker.close):
-        price = parse_float(price_candidate)
-        if price is not None and price > 0:
-            return price
-    return None
-
-
-def get_what_if_state(ib: IB, contract: Contract, order: Order) -> OrderState:
-    response = ib.whatIfOrder(contract, order)
-    if isinstance(response, list):
-        raise RuntimeError(
-            "IBKR did not return what-if margin state. This is often caused by "
-            "IBKR warning code 10349 when TIF is not set explicitly."
-        )
-    return response
 
 
 def print_trade_snapshot(trade: Trade) -> None:
@@ -164,6 +129,11 @@ def main() -> int:
 
     load_env(args.env)
     port = args.port or get_int_env("BROKER_TWS_PORT", 7497)
+    min_days_to_expiry = get_int_env(
+        "BROKER_CL_MIN_DAYS_TO_EXPIRY", DEFAULT_CL_MIN_DAYS_TO_EXPIRY
+    )
+    if min_days_to_expiry is None or min_days_to_expiry < 0:
+        raise SystemExit("BROKER_CL_MIN_DAYS_TO_EXPIRY must be >= 0.")
 
     action = args.side.upper()
 
@@ -175,7 +145,9 @@ def main() -> int:
         account = choose_account(ib, args.account)
         print(f"Using account: {mask_ibkr_account(account)}")
 
-        qualified_contract = select_front_month_contract(ib)
+        qualified_contract = select_front_month_contract(
+            ib, min_days_to_expiry=min_days_to_expiry
+        )
         contract_month = format_contract_month(qualified_contract) or "unknown"
         contract_expiry = qualified_contract.lastTradeDateOrContractMonth
 
@@ -183,6 +155,7 @@ def main() -> int:
         print(f"  Action: {action}")
         print(f"  Quantity: {args.qty}")
         print(f"  Contract: CL {contract_month} (NYMEX)")
+        print(f"  Min Days To Expiry: {min_days_to_expiry}")
         print(f"  Connection: {args.host}:{port} (clientId={args.client_id})")
 
         print(
@@ -198,11 +171,9 @@ def main() -> int:
         order.tif = "DAY"
 
         current_init_margin, current_maint_margin = get_current_margin(ib, account)
-        what_if_numeric = get_what_if_state(ib, qualified_contract, order).numeric(
-            digits=2
-        )
-        expected_init_margin = parse_float(what_if_numeric.initMarginAfter)
-        expected_maint_margin = parse_float(what_if_numeric.maintMarginAfter)
+        margin_info = get_what_if_margin(ib, qualified_contract, action, args.qty, account)
+        expected_init_margin = margin_info["init_margin_after"]
+        expected_maint_margin = margin_info["maint_margin_after"]
 
         tickers = ib.reqTickers(qualified_contract)
         reference_price = get_reference_price(tickers[0]) if tickers else None
@@ -231,6 +202,9 @@ def main() -> int:
         else:
             print("  Contract Multiplier: N/A")
         print(f"  Notional Traded Size (est.): {format_money(notional)}")
+
+        if margin_info.get("warning_text"):
+            print(f"  Warning: {margin_info['warning_text']}")
 
         if not args.yes:
             print()

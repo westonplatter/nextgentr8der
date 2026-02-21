@@ -10,7 +10,7 @@ entries:
         - https://github.com/westonplatter/agentically.git:agents-md-partials/AGENTS.docs.md
         - https://github.com/westonplatter/agentically.git:agents-md-partials/AGENTS.pull-requests.md
     dest: ./AGENTS.md
-    checksum: sha256:bc4a01672e056374964b2130131e84418f014454f8fb58f2191e3fe886741a43
+    checksum: sha256:3487bb2fb367e50e886b1d22c83ca5f88cb584ee04f6b6d9acf0372c1cfadd0f
   anthropic-skills-example:
     source: https://github.com/anthropics/skills.git
     dest: ./.claude/skills/

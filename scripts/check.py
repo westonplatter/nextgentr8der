@@ -55,9 +55,7 @@ def main(
             failed += 1
 
     typer.echo("")
-    typer.echo(
-        f"Results: {passed} passed, {failed} failed out of {passed + failed} modules"
-    )
+    typer.echo(f"Results: {passed} passed, {failed} failed out of {passed + failed} modules")
 
     if failed:
         raise SystemExit(1)

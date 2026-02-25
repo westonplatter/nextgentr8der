@@ -45,9 +45,7 @@ def get_account(account_id: int, db: Session = DB_SESSION_DEPENDENCY):
 
 
 @router.patch("/accounts/{account_id}", response_model=AccountResponse)
-def update_account(
-    account_id: int, body: AccountUpdate, db: Session = DB_SESSION_DEPENDENCY
-):
+def update_account(account_id: int, body: AccountUpdate, db: Session = DB_SESSION_DEPENDENCY):
     account = db.get(Account, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")

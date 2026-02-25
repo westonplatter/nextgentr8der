@@ -26,9 +26,7 @@ def upsert_worker_heartbeat(
 ) -> None:
     heartbeat_at = now_utc()
     with Session(engine) as session:
-        row = session.execute(
-            select(WorkerHeartbeat).where(WorkerHeartbeat.worker_type == worker_type)
-        ).scalar_one_or_none()
+        row = session.execute(select(WorkerHeartbeat).where(WorkerHeartbeat.worker_type == worker_type)).scalar_one_or_none()
         if row is None:
             row = WorkerHeartbeat(
                 worker_type=worker_type,

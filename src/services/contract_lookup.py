@@ -181,19 +181,13 @@ def _pick_month(
     """Pick a contract month. Returns (contract, dte, requested_month, requested_available, available_months)."""
     available_months = list(contracts_by_month.keys())
 
-    requested_available = (
-        requested_contract_month in contracts_by_month
-        if requested_contract_month is not None
-        else True
-    )
+    requested_available = requested_contract_month in contracts_by_month if requested_contract_month is not None else True
 
     if requested_contract_month and requested_available:
         selected_month = requested_contract_month
     elif requested_contract_month and not requested_available:
         if not allow_fallback:
-            available_text = ", ".join(
-                display_contract_month(m) for m in available_months
-            )
+            available_text = ", ".join(display_contract_month(m) for m in available_months)
             raise ValueError(
                 f"{display_contract_month(requested_contract_month)} {label} contract is not currently available. "
                 f"Available contract months: {available_text}."
@@ -238,10 +232,7 @@ def _select_stock(session: Session, symbol: str) -> dict[str, Any]:
     )
     contract = session.execute(stmt).scalars().first()
     if contract is None:
-        raise ValueError(
-            f"No active STK contract for {symbol} in the database. "
-            "Run a contracts.sync job first (enqueue_contracts_sync_job)."
-        )
+        raise ValueError(f"No active STK contract for {symbol} in the database. " "Run a contracts.sync job first (enqueue_contracts_sync_job).")
     result = _contract_to_dict(contract, None)
     result["requested_contract_month"] = None
     result["requested_available"] = True
@@ -267,9 +258,7 @@ def _select_future(
 
     contracts_by_month = _group_by_month(candidates)
     if not contracts_by_month:
-        raise ValueError(
-            f"No {symbol} {sec_type} contracts with valid contract_month data."
-        )
+        raise ValueError(f"No {symbol} {sec_type} contracts with valid contract_month data.")
 
     selected, dte, req_month, req_available, avail_months = _pick_month(
         contracts_by_month,
@@ -302,17 +291,10 @@ def _select_option(
 
     if not candidates and strike is not None:
         # No exact strike match — find available strikes to report
-        all_candidates = _load_candidates(
-            session, symbol, sec_type, min_days_to_expiry, right=right
-        )
-        available_strikes = sorted(
-            {c.strike for c, _ in all_candidates if c.strike is not None}
-        )
+        all_candidates = _load_candidates(session, symbol, sec_type, min_days_to_expiry, right=right)
+        available_strikes = sorted({c.strike for c, _ in all_candidates if c.strike is not None})
         strikes_text = ", ".join(str(s) for s in available_strikes[:20])
-        raise ValueError(
-            f"No active {symbol} {sec_type} contract with strike={strike}. "
-            f"Available strikes: {strikes_text or 'none (run contracts.sync)'}."
-        )
+        raise ValueError(f"No active {symbol} {sec_type} contract with strike={strike}. " f"Available strikes: {strikes_text or 'none (run contracts.sync)'}.")
 
     if not candidates:
         raise ValueError(
@@ -323,9 +305,7 @@ def _select_option(
 
     contracts_by_month = _group_by_month(candidates)
     if not contracts_by_month:
-        raise ValueError(
-            f"No {symbol} {sec_type} contracts with valid contract_month data."
-        )
+        raise ValueError(f"No {symbol} {sec_type} contracts with valid contract_month data.")
 
     selected, dte, req_month, req_available, avail_months = _pick_month(
         contracts_by_month,

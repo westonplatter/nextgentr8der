@@ -37,10 +37,7 @@ def sync_contracts(
         try:
             ib.connect(host, port, clientId=client_id, timeout=connect_timeout_seconds)
         except TimeoutError as exc:
-            raise RuntimeError(
-                f"Timed out connecting to TWS/Gateway for contract sync "
-                f"(host={host}, port={port}, client_id={client_id})."
-            ) from exc
+            raise RuntimeError(f"Timed out connecting to TWS/Gateway for contract sync " f"(host={host}, port={port}, client_id={client_id}).") from exc
 
         all_con_ids: set[int] = set()
         synced_count = 0
@@ -56,16 +53,10 @@ def sync_contracts(
             with Session(engine) as session:
                 for detail in contract_details:
                     contract = detail.contract
-                    if (
-                        contract is None
-                        or contract.conId is None
-                        or contract.conId == 0
-                    ):
+                    if contract is None or contract.conId is None or contract.conId == 0:
                         continue
 
-                    raw_expiry = (
-                        contract.lastTradeDateOrContractMonth or ""
-                    ).strip() or None
+                    raw_expiry = (contract.lastTradeDateOrContractMonth or "").strip() or None
                     contract_month = infer_contract_month_from_local_symbol(
                         local_symbol=contract.localSymbol or None,
                         contract_expiry=raw_expiry,
@@ -83,16 +74,8 @@ def sync_contracts(
                         "contract_month": contract_month,
                         "contract_expiry": raw_expiry,
                         "multiplier": contract.multiplier or None,
-                        "strike": (
-                            contract.strike
-                            if contract.strike and contract.strike != 0.0
-                            else None
-                        ),
-                        "right": (
-                            contract.right
-                            if contract.right and contract.right != "?"
-                            else None
-                        ),
+                        "strike": (contract.strike if contract.strike and contract.strike != 0.0 else None),
+                        "right": (contract.right if contract.right and contract.right != "?" else None),
                         "primary_exchange": contract.primaryExchange or None,
                         "is_active": True,
                         "fetched_at": now,

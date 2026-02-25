@@ -60,9 +60,7 @@ def parse_contract_expiry(last_trade_or_month: str) -> dt.date | None:
     return None
 
 
-def days_until_contract_expiry(
-    last_trade_or_month: str, today: dt.date | None = None
-) -> int | None:
+def days_until_contract_expiry(last_trade_or_month: str, today: dt.date | None = None) -> int | None:
     expiry = parse_contract_expiry(last_trade_or_month)
     if expiry is None:
         return None
@@ -70,12 +68,8 @@ def days_until_contract_expiry(
     return (expiry - comparison_day).days
 
 
-def contract_days_to_expiry(
-    contract: Contract, today: dt.date | None = None
-) -> int | None:
-    return days_until_contract_expiry(
-        contract.lastTradeDateOrContractMonth, today=today
-    )
+def contract_days_to_expiry(contract: Contract, today: dt.date | None = None) -> int | None:
+    return days_until_contract_expiry(contract.lastTradeDateOrContractMonth, today=today)
 
 
 def format_contract_month(contract: Contract) -> str | None:
@@ -96,15 +90,11 @@ def format_contract_month(contract: Contract) -> str | None:
     return None
 
 
-def select_front_month_contract(
-    ib: IB, min_days_to_expiry: int = DEFAULT_CL_MIN_DAYS_TO_EXPIRY
-) -> Contract:
+def select_front_month_contract(ib: IB, min_days_to_expiry: int = DEFAULT_CL_MIN_DAYS_TO_EXPIRY) -> Contract:
     if min_days_to_expiry < 0:
         raise ValueError("min_days_to_expiry must be >= 0")
 
-    contract_details = ib.reqContractDetails(
-        Future("CL", exchange="NYMEX", currency="USD")
-    )
+    contract_details = ib.reqContractDetails(Future("CL", exchange="NYMEX", currency="USD"))
     if not contract_details:
         raise RuntimeError("No CL futures contract details returned from IBKR")
 
@@ -116,12 +106,7 @@ def select_front_month_contract(
             continue
         expiry = parse_contract_expiry(contract.lastTradeDateOrContractMonth)
         days_to_expiry = contract_days_to_expiry(contract)
-        if (
-            contract.secType != "FUT"
-            or expiry is None
-            or days_to_expiry is None
-            or days_to_expiry < 0
-        ):
+        if contract.secType != "FUT" or expiry is None or days_to_expiry is None or days_to_expiry < 0:
             continue
         non_expired.append((expiry, contract))
         if days_to_expiry < min_days_to_expiry:
@@ -130,9 +115,7 @@ def select_front_month_contract(
 
     if not candidates:
         if non_expired:
-            nearest_expiry, nearest_contract = min(
-                non_expired, key=lambda item: item[0]
-            )
+            nearest_expiry, nearest_contract = min(non_expired, key=lambda item: item[0])
             nearest_days = contract_days_to_expiry(nearest_contract)
             raise RuntimeError(
                 "No CL futures contracts found outside the near-expiry safety window "
@@ -146,9 +129,7 @@ def select_front_month_contract(
     front_month_contract = candidates[0][1]
     qualified_contracts = ib.qualifyContracts(front_month_contract)
     if len(qualified_contracts) != 1:
-        raise RuntimeError(
-            f"Expected exactly one qualified front-month contract, got {len(qualified_contracts)}"
-        )
+        raise RuntimeError(f"Expected exactly one qualified front-month contract, got {len(qualified_contracts)}")
     return qualified_contracts[0]
 
 
@@ -207,9 +188,7 @@ def infer_contract_month_from_local_symbol(
     expiry_date = parse_contract_expiry(contract_expiry or "")
     if expiry_date is not None:
         fallback_year = expiry_date.year
-    elif (
-        contract_expiry and len(contract_expiry) >= 4 and contract_expiry[:4].isdigit()
-    ):
+    elif contract_expiry and len(contract_expiry) >= 4 and contract_expiry[:4].isdigit():
         fallback_year = int(contract_expiry[:4])
 
     year = _infer_year_from_code(year_code, fallback_year)
@@ -230,12 +209,7 @@ def normalize_contract_month_input(contract_month: str | None) -> str | None:
         return None
 
     compact = " ".join(raw.split())
-    if (
-        len(compact) == 7
-        and compact[4] == "-"
-        and compact[:4].isdigit()
-        and compact[5:7].isdigit()
-    ):
+    if len(compact) == 7 and compact[4] == "-" and compact[:4].isdigit() and compact[5:7].isdigit():
         year = int(compact[:4])
         month = int(compact[5:7])
         if 1 <= month <= 12:
@@ -256,9 +230,7 @@ def normalize_contract_month_input(contract_month: str | None) -> str | None:
         except ValueError:
             continue
 
-    raise ValueError(
-        "contract_month must be YYYY-MM, YYYYMM, or a month name like 'March 2026'."
-    )
+    raise ValueError("contract_month must be YYYY-MM, YYYYMM, or a month name like 'March 2026'.")
 
 
 def display_contract_month(contract_month: str) -> str:

@@ -29,11 +29,7 @@ class TradebotChatRequest(BaseModel):
 
 
 def _extract_message_text(message: ChatMessage) -> str:
-    parts = [
-        part.text.strip()
-        for part in message.parts
-        if part.type == "text" and part.text and part.text.strip()
-    ]
+    parts = [part.text.strip() for part in message.parts if part.type == "text" and part.text and part.text.strip()]
     return "\n".join(parts)
 
 
@@ -53,9 +49,7 @@ def _to_agent_messages(messages: list[ChatMessage]) -> list[ChatInputMessage]:
 
 
 @router.post("/tradebot/chat", response_class=PlainTextResponse)
-def tradebot_chat(
-    body: TradebotChatRequest, db: Session = DB_SESSION_DEPENDENCY
-) -> str:
+def tradebot_chat(body: TradebotChatRequest, db: Session = DB_SESSION_DEPENDENCY) -> str:
     normalized_messages = _to_agent_messages(body.messages)
     if not normalized_messages:
         raise HTTPException(status_code=400, detail="No chat message text found")

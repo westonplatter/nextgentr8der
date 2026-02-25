@@ -52,9 +52,7 @@ def get_str_env(name: str, default: str | None = None) -> str | None:
 def resolve_1password_reference(name: str, reference: str) -> str:
     op_executable = shutil.which("op")
     if op_executable is None:
-        raise ValueError(
-            f"{name} uses 1Password reference '{reference}', but `op` CLI is not installed."
-        )
+        raise ValueError(f"{name} uses 1Password reference '{reference}', but `op` CLI is not installed.")
 
     try:
         result = subprocess.run(  # noqa: S603  # nosec B603
@@ -66,17 +64,12 @@ def resolve_1password_reference(name: str, reference: str) -> str:
     except subprocess.CalledProcessError as exc:
         details = (exc.stderr or exc.stdout or "").strip()
         if details:
-            raise ValueError(
-                f"Could not resolve 1Password reference for {name} ('{reference}'): {details}"
-            ) from exc
+            raise ValueError(f"Could not resolve 1Password reference for {name} ('{reference}'): {details}") from exc
         raise ValueError(
-            f"Could not resolve 1Password reference for {name} ('{reference}'). "
-            "Run `op signin` or start with `op run --env-file=.env.dev -- <command>`."
+            f"Could not resolve 1Password reference for {name} ('{reference}'). " "Run `op signin` or start with `op run --env-file=.env.dev -- <command>`."
         ) from exc
 
     resolved = result.stdout.strip()
     if not resolved:
-        raise ValueError(
-            f"1Password reference for {name} ('{reference}') resolved to an empty value."
-        )
+        raise ValueError(f"1Password reference for {name} ('{reference}') resolved to an empty value.")
     return resolved

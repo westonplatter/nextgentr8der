@@ -39,9 +39,7 @@ def classify_light(status: str, seconds_since_heartbeat: float | None) -> str:
     return "red"
 
 
-def to_response(
-    now: datetime, row: WorkerHeartbeat | None, worker_type: str
-) -> WorkerStatusResponse:
+def to_response(now: datetime, row: WorkerHeartbeat | None, worker_type: str) -> WorkerStatusResponse:
     if row is None:
         return WorkerStatusResponse(
             worker_type=worker_type,
@@ -71,7 +69,4 @@ def list_worker_statuses(
     by_type = {row.worker_type: row for row in rows}
     now = datetime.now(timezone.utc)
     worker_types = [WORKER_TYPE_ORDERS, WORKER_TYPE_JOBS]
-    return [
-        to_response(now, by_type.get(worker_type), worker_type)
-        for worker_type in worker_types
-    ]
+    return [to_response(now, by_type.get(worker_type), worker_type) for worker_type in worker_types]

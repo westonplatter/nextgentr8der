@@ -111,22 +111,14 @@ def to_order_event_response(event: OrderEvent) -> OrderEventResponse:
 
 @router.get("/orders", response_model=list[OrderResponse])
 def list_orders(db: Session = DB_SESSION_DEPENDENCY) -> list[OrderResponse]:
-    stmt = (
-        select(Order, Account)
-        .outerjoin(Account, Order.account_id == Account.id)
-        .order_by(Order.created_at.desc())
-    )
+    stmt = select(Order, Account).outerjoin(Account, Order.account_id == Account.id).order_by(Order.created_at.desc())
     rows = db.execute(stmt).all()
     return [to_order_response(order, account) for order, account in rows]
 
 
 @router.get("/orders/{order_id}", response_model=OrderResponse)
 def get_order(order_id: int, db: Session = DB_SESSION_DEPENDENCY) -> OrderResponse:
-    stmt = (
-        select(Order, Account)
-        .outerjoin(Account, Order.account_id == Account.id)
-        .where(Order.id == order_id)
-    )
+    stmt = select(Order, Account).outerjoin(Account, Order.account_id == Account.id).where(Order.id == order_id)
     row = db.execute(stmt).one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -135,17 +127,11 @@ def get_order(order_id: int, db: Session = DB_SESSION_DEPENDENCY) -> OrderRespon
 
 
 @router.get("/orders/{order_id}/events", response_model=list[OrderEventResponse])
-def list_order_events(
-    order_id: int, db: Session = DB_SESSION_DEPENDENCY
-) -> list[OrderEventResponse]:
+def list_order_events(order_id: int, db: Session = DB_SESSION_DEPENDENCY) -> list[OrderEventResponse]:
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    stmt = (
-        select(OrderEvent)
-        .where(OrderEvent.order_id == order_id)
-        .order_by(OrderEvent.created_at)
-    )
+    stmt = select(OrderEvent).where(OrderEvent.order_id == order_id).order_by(OrderEvent.created_at)
     events = list(db.execute(stmt).scalars().all())
     return [to_order_event_response(event) for event in events]

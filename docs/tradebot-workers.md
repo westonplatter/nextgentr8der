@@ -16,6 +16,7 @@ Workers run as separate processes and consume DB queues.
   - `positions.sync` -> `src/services/position_sync.py`
   - `contracts.sync` -> `src/services/contract_sync.py`
   - `watchlist.add_instrument` -> `src/services/watchlist_instrument_sync.py`
+  - `watchlist.quotes_refresh` -> `src/services/watchlist_quotes.py`
 - Claims queued jobs, runs handler, writes `result`/`status`, retries until `max_attempts`.
 
 ## Heartbeats and Health
@@ -43,9 +44,10 @@ The command runs under `op run --env-file=.env.<env>` to resolve `op://` referen
 ## Key Files
 
 - `scripts/work_jobs.py`
-- `src/services/jobs.py`
+- `src/services/jobs.py` (includes `JOB_TYPE_WATCHLIST_QUOTES_REFRESH`)
 - `src/services/position_sync.py`
 - `src/services/contract_sync.py`
 - `src/services/watchlist_instrument_sync.py`
+- `src/services/watchlist_quotes.py`
 - `src/services/worker_heartbeat.py`
 - `src/api/routers/workers.py`

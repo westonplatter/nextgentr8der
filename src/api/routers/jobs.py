@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from src.api.deps import get_db
 from src.models import Job
-from src.services.jobs import enqueue_job, now_utc
+from src.services.jobs import now_utc
 
 router = APIRouter()
 DB_SESSION_DEPENDENCY = Depends(get_db)
@@ -75,30 +75,6 @@ def get_job(job_id: int, db: Session = DB_SESSION_DEPENDENCY) -> JobResponse:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return to_job_response(job)
-
-
-@router.post("/jobs/{job_id}/rerun", response_model=JobResponse, status_code=201)
-def rerun_job(job_id: int, db: Session = DB_SESSION_DEPENDENCY) -> JobResponse:
-    job = db.get(Job, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.status != "failed":
-        raise HTTPException(status_code=400, detail="Only failed jobs can be rerun")
-
-    rerun = enqueue_job(
-        session=db,
-        job_type=job.job_type,
-        payload=job.payload,
-        source=job.source,
-        request_text=job.request_text,
-        max_attempts=job.max_attempts,
-    )
-    now = now_utc()
-    job.archived_at = now
-    job.updated_at = now
-    db.commit()
-    db.refresh(rerun)
-    return to_job_response(rerun)
 
 
 @router.post("/jobs/{job_id}/archive", response_model=JobResponse)

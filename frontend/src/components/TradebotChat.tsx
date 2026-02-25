@@ -2,12 +2,11 @@ import { useMemo, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { TextStreamChatTransport, type UIMessage } from "ai";
 import JobsTable from "./JobsTable";
-import OrdersSideTable from "./OrdersSideTable";
 
 const QUICK_PROMPTS = [
   "Show me current positions",
-  "Buy 1 more CL contracts",
-  "Status for latest orders",
+  "Show CL front-month contracts",
+  "Show my watch lists",
 ];
 const POSITION_SYNC_PROMPT = "Refresh positions now";
 
@@ -81,7 +80,7 @@ export default function TradebotChat() {
 
   return (
     <div className="w-full h-full min-h-0 overflow-y-auto lg:overflow-hidden">
-      <div className="grid h-auto min-h-0 gap-4 lg:h-full lg:overflow-hidden lg:grid-cols-[minmax(0,1.8fr)_minmax(400px,1.2fr)_minmax(420px,1.3fr)]">
+      <div className="grid h-auto min-h-0 gap-4 lg:h-full lg:overflow-hidden lg:grid-cols-[minmax(0,3fr)_minmax(400px,2fr)]">
         <div className="min-w-0 min-h-0 lg:h-full flex flex-col">
           <div className="mb-3 flex flex-wrap gap-2">
             <button
@@ -105,7 +104,7 @@ export default function TradebotChat() {
           <div className="min-h-0 flex-1 overflow-y-auto rounded border border-gray-300 bg-white p-4">
             {messages.length === 0 && (
               <p className="text-sm text-gray-500">
-                Ask about positions, queue CL orders, or check order progress.
+                Ask about positions, contracts, watch lists, or jobs.
               </p>
             )}
             <div className="space-y-3">
@@ -136,7 +135,7 @@ export default function TradebotChat() {
               type="text"
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="e.g. buy 1 more CL contracts account 1"
+              placeholder="e.g. show CL front month"
               className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm"
             />
             <button
@@ -163,7 +162,6 @@ export default function TradebotChat() {
           )}
         </div>
         <JobsTable />
-        <OrdersSideTable />
       </div>
     </div>
   );

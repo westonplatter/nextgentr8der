@@ -3,11 +3,27 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass
 
 from ib_async import IB, Contract, Future
 
 DEFAULT_CL_MIN_DAYS_TO_EXPIRY = 7
+_FUTURES_MONTH_CODE_TO_MONTH = {
+    "F": 1,
+    "G": 2,
+    "H": 3,
+    "J": 4,
+    "K": 5,
+    "M": 6,
+    "N": 7,
+    "Q": 8,
+    "U": 9,
+    "V": 10,
+    "X": 11,
+    "Z": 12,
+}
+_FUTURES_LOCAL_SYMBOL_PATTERN = re.compile(r"([FGHJKMNQUVXZ])(\d{1,2})$")
 
 
 @dataclass(frozen=True)
@@ -64,6 +80,13 @@ def contract_days_to_expiry(
 
 def format_contract_month(contract: Contract) -> str | None:
     raw_value = (contract.lastTradeDateOrContractMonth or "").strip()
+    inferred = infer_contract_month_from_local_symbol(
+        local_symbol=(contract.localSymbol or None),
+        contract_expiry=(raw_value or None),
+        sec_type=(contract.secType or None),
+    )
+    if inferred is not None:
+        return inferred
     if len(raw_value) >= 6 and raw_value[:6].isdigit():
         return f"{raw_value[:4]}-{raw_value[4:6]}"
 
@@ -138,6 +161,59 @@ def format_contract_month_from_expiry(contract_expiry: str | None) -> str | None
     if expiry is not None:
         return expiry.strftime("%Y-%m")
     return None
+
+
+def _infer_year_from_code(year_code: str, fallback_year: int | None) -> int:
+    if len(year_code) == 2:
+        return 2000 + int(year_code)
+
+    digit = int(year_code)
+    if fallback_year is None:
+        current_year = dt.date.today().year
+        base = (current_year // 10) * 10 + digit
+        if base < current_year:
+            base += 10
+        return base
+
+    decade = (fallback_year // 10) * 10
+    candidates = [decade - 10 + digit, decade + digit, decade + 10 + digit]
+    return min(candidates, key=lambda candidate: abs(candidate - fallback_year))
+
+
+def infer_contract_month_from_local_symbol(
+    local_symbol: str | None,
+    contract_expiry: str | None,
+    sec_type: str | None,
+) -> str | None:
+    """Infer contract month from a futures local symbol like CLJ6/CLJ26."""
+    if (sec_type or "").upper() != "FUT":
+        return None
+
+    raw_local_symbol = (local_symbol or "").strip().upper()
+    if not raw_local_symbol:
+        return None
+
+    match = _FUTURES_LOCAL_SYMBOL_PATTERN.search(raw_local_symbol)
+    if match is None:
+        return None
+
+    month_code = match.group(1)
+    year_code = match.group(2)
+    month = _FUTURES_MONTH_CODE_TO_MONTH.get(month_code)
+    if month is None:
+        return None
+
+    fallback_year = None
+    expiry_date = parse_contract_expiry(contract_expiry or "")
+    if expiry_date is not None:
+        fallback_year = expiry_date.year
+    elif (
+        contract_expiry and len(contract_expiry) >= 4 and contract_expiry[:4].isdigit()
+    ):
+        fallback_year = int(contract_expiry[:4])
+
+    year = _infer_year_from_code(year_code, fallback_year)
+    return f"{year:04d}-{month:02d}"
 
 
 def normalize_contract_month_input(contract_month: str | None) -> str | None:

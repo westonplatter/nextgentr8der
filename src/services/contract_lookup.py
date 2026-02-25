@@ -11,6 +11,7 @@ from src.models import ContractRef
 from src.services.cl_contracts import (
     days_until_contract_expiry,
     display_contract_month,
+    infer_contract_month_from_local_symbol,
 )
 
 DEFAULT_MIN_DAYS_TO_EXPIRY = 7
@@ -104,6 +105,12 @@ def select_contract(
 
 
 def _contract_to_dict(c: ContractRef, dte: int | None) -> dict[str, Any]:
+    inferred_contract_month = infer_contract_month_from_local_symbol(
+        local_symbol=c.local_symbol,
+        contract_expiry=c.contract_expiry,
+        sec_type=c.sec_type,
+    )
+    contract_month = inferred_contract_month or c.contract_month
     return {
         "con_id": c.con_id,
         "symbol": c.symbol,
@@ -112,7 +119,7 @@ def _contract_to_dict(c: ContractRef, dte: int | None) -> dict[str, Any]:
         "currency": c.currency,
         "local_symbol": c.local_symbol,
         "trading_class": c.trading_class,
-        "contract_month": c.contract_month,
+        "contract_month": contract_month,
         "contract_expiry": c.contract_expiry,
         "multiplier": c.multiplier,
         "strike": c.strike,

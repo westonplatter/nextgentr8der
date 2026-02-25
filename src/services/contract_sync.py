@@ -10,7 +10,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from src.models import ContractRef
-from src.services.cl_contracts import format_contract_month_from_expiry
+from src.services.cl_contracts import (
+    format_contract_month_from_expiry,
+    infer_contract_month_from_local_symbol,
+)
 
 
 def _now_utc() -> datetime:
@@ -63,7 +66,11 @@ def sync_contracts(
                     raw_expiry = (
                         contract.lastTradeDateOrContractMonth or ""
                     ).strip() or None
-                    contract_month = format_contract_month_from_expiry(raw_expiry)
+                    contract_month = infer_contract_month_from_local_symbol(
+                        local_symbol=contract.localSymbol or None,
+                        contract_expiry=raw_expiry,
+                        sec_type=contract.secType or spec.secType or "FUT",
+                    ) or format_contract_month_from_expiry(raw_expiry)
 
                     values = {
                         "con_id": contract.conId,

@@ -207,7 +207,7 @@ export default function JobsTable() {
                 <td className="px-2 py-1 text-gray-700">
                   {formatDuration(computeTotalMs(job, nowMs))}
                 </td>
-                <td className="px-2 py-1">
+                <td className="px-2 py-1 whitespace-nowrap">
                   <div className="flex gap-1">
                     {job.status === "failed" && (
                       <button

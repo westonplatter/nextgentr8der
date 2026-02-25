@@ -20,6 +20,15 @@ interface Position {
   fetched_at: string;
 }
 
+function formatExpiry(value: string | null | undefined): string {
+  if (!value) return "\u2014";
+  // YYYYMMDD → YYYY-MM-DD
+  if (value.length === 8 && !value.includes("-")) {
+    return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+  }
+  return value;
+}
+
 const COLUMNS: { key: keyof Position; label: string }[] = [
   { key: "account_alias", label: "Account" },
   { key: "con_id", label: "Con ID" },
@@ -30,11 +39,10 @@ const COLUMNS: { key: keyof Position; label: string }[] = [
   { key: "trading_class", label: "Trading Class" },
   { key: "last_trade_date", label: "Last Trade Date" },
   { key: "strike", label: "Strike" },
-  { key: "right", label: "Right" },
+  { key: "right", label: "Call/Put" },
   { key: "multiplier", label: "Multiplier" },
   { key: "position", label: "Position" },
   { key: "avg_cost", label: "Avg Cost" },
-  { key: "fetched_at", label: "Fetched At" },
 ];
 
 export default function PositionsTable() {
@@ -81,7 +89,9 @@ export default function PositionsTable() {
             >
               {COLUMNS.map((col) => (
                 <td key={col.key} className="px-3 py-2 whitespace-nowrap">
-                  {pos[col.key] ?? "—"}
+                  {col.key === "last_trade_date"
+                    ? formatExpiry(pos[col.key] as string | null)
+                    : (pos[col.key] ?? "—")}
                 </td>
               ))}
             </tr>

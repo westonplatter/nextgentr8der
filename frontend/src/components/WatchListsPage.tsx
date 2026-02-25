@@ -68,21 +68,34 @@ interface WatchListQuotesRefreshResponse {
   message: string;
 }
 
-const INSTRUMENT_COLUMNS: { key: keyof Instrument; label: string }[] = [
+const INSTRUMENT_COLUMNS: {
+  key: keyof Instrument;
+  label: string;
+  muted?: boolean;
+}[] = [
   { key: "contract_display_name", label: "Contract" },
-  { key: "sec_type", label: "Type" },
-  { key: "con_id", label: "Con ID" },
-  { key: "local_symbol", label: "Local Symbol" },
-  { key: "exchange", label: "Exchange" },
-  { key: "contract_month", label: "Month" },
-  { key: "contract_expiry", label: "Expiry" },
-  { key: "strike", label: "Strike" },
-  { key: "right", label: "Right" },
-  { key: "multiplier", label: "Multiplier" },
   { key: "bid_price", label: "Bid" },
   { key: "ask_price", label: "Ask" },
   { key: "close_price", label: "Close" },
+  { key: "strike", label: "Strike" },
+  { key: "contract_expiry", label: "Expiry" },
+  { key: "right", label: "Call/Put" },
+  { key: "contract_month", label: "Month", muted: true },
+  { key: "local_symbol", label: "Local Symbol", muted: true },
+  { key: "sec_type", label: "Type", muted: true },
+  { key: "con_id", label: "Con ID", muted: true },
+  { key: "exchange", label: "Exchange", muted: true },
+  { key: "multiplier", label: "Multiplier", muted: true },
 ];
+
+function formatExpiry(value: string | null | undefined): string {
+  if (!value) return "\u2014";
+  // YYYYMMDD → YYYY-MM-DD
+  if (value.length === 8 && !value.includes("-")) {
+    return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+  }
+  return value;
+}
 
 function formatQuotePrice(value: number | null | undefined): string {
   if (value === null || value === undefined) {
@@ -520,7 +533,7 @@ export default function WatchListsPage() {
                       {INSTRUMENT_COLUMNS.map((col) => (
                         <th
                           key={col.key}
-                          className="px-3 py-2 font-semibold text-gray-700 whitespace-nowrap"
+                          className={`px-3 py-2 font-semibold whitespace-nowrap ${col.muted ? "text-gray-400 font-normal" : "text-gray-700"}`}
                         >
                           {col.label}
                         </th>
@@ -537,13 +550,15 @@ export default function WatchListsPage() {
                         {INSTRUMENT_COLUMNS.map((col) => (
                           <td
                             key={col.key}
-                            className="px-3 py-2 whitespace-nowrap"
+                            className={`px-3 py-2 whitespace-nowrap ${col.muted ? "text-gray-400" : ""}`}
                           >
                             {col.key === "bid_price" ||
                             col.key === "ask_price" ||
                             col.key === "close_price"
                               ? formatQuotePrice(inst[col.key] as number | null)
-                              : (inst[col.key] ?? "\u2014")}
+                              : col.key === "contract_expiry"
+                                ? formatExpiry(inst[col.key] as string | null)
+                                : (inst[col.key] ?? "\u2014")}
                           </td>
                         ))}
                         <td className="px-3 py-2">

@@ -11,7 +11,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from src.models import ContractRef, WatchList, WatchListInstrument
-from src.services.cl_contracts import format_contract_month_from_expiry
+from src.services.cl_contracts import (
+    format_contract_month_from_expiry,
+    infer_contract_month_from_local_symbol,
+)
 from src.services.ibkr_select_contracts import select_contract_for_watchlist
 
 logger = logging.getLogger("services:watchlist_instrument_sync")
@@ -72,7 +75,11 @@ def fetch_and_add_instrument(
 
         con_id = contract.conId
         raw_expiry = (contract.lastTradeDateOrContractMonth or "").strip() or None
-        fetched_contract_month = format_contract_month_from_expiry(raw_expiry)
+        fetched_contract_month = infer_contract_month_from_local_symbol(
+            local_symbol=contract.localSymbol or None,
+            contract_expiry=raw_expiry,
+            sec_type=contract.secType or sec_type,
+        ) or format_contract_month_from_expiry(raw_expiry)
         now = _now_utc()
 
         # Upsert into contract_refs (same pattern as contract_sync.py)

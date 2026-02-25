@@ -38,9 +38,7 @@ class PositionResponse(BaseModel):
 
 @router.get("/positions", response_model=list[PositionResponse])
 def list_positions(db: Session = DB_SESSION_DEPENDENCY):
-    stmt = select(Position, Account).outerjoin(
-        Account, Position.account_id == Account.id
-    )
+    stmt = select(Position, Account).outerjoin(Account, Position.account_id == Account.id)
     rows = db.execute(stmt).all()
     results = []
     for pos, acct in rows:

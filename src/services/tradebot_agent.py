@@ -57,9 +57,7 @@ _SYSTEM_PROMPT = (
 _MAX_MESSAGES = 16
 _MAX_TOOL_STEPS = 8
 _DEFAULT_LLM_MODEL = os.getenv("TRADEBOT_LLM_MODEL") or "gpt-5-mini"
-_DEFAULT_LLM_BASE_URL = (
-    os.getenv("TRADEBOT_LLM_BASE_URL") or "https://api.openai.com/v1"
-)
+_DEFAULT_LLM_BASE_URL = os.getenv("TRADEBOT_LLM_BASE_URL") or "https://api.openai.com/v1"
 _DEFAULT_TIMEOUT_SECONDS = 45
 _TOOL_SOURCE = "tradebot-llm"
 
@@ -462,9 +460,7 @@ def _coerce_optional_str_arg(args: dict[str, Any], key: str) -> str | None:
     return value or None
 
 
-def _tool_list_accounts(
-    session: Session, _: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_list_accounts(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
     if args:
         raise ValueError("list_accounts does not take arguments.")
     rows = session.execute(select(Account).order_by(Account.id)).scalars().all()
@@ -480,16 +476,9 @@ def _tool_list_accounts(
     }
 
 
-def _tool_list_positions(
-    session: Session, _: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_list_positions(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
     limit = _coerce_int_arg(args, "limit", 25, 1, 200)
-    stmt = (
-        select(Position, Account)
-        .outerjoin(Account, Position.account_id == Account.id)
-        .order_by(func.abs(Position.position).desc())
-        .limit(limit)
-    )
+    stmt = select(Position, Account).outerjoin(Account, Position.account_id == Account.id).order_by(func.abs(Position.position).desc()).limit(limit)
     rows = session.execute(stmt).all()
     positions = []
     for position, account in rows:
@@ -516,11 +505,7 @@ def _tool_list_jobs(session: Session, _: str, args: dict[str, Any]) -> dict[str,
     stmt = select(Job)
     if not include_archived:
         stmt = stmt.where(Job.archived_at.is_(None))
-    rows = (
-        session.execute(stmt.order_by(Job.created_at.desc()).limit(limit))
-        .scalars()
-        .all()
-    )
+    rows = session.execute(stmt.order_by(Job.created_at.desc()).limit(limit)).scalars().all()
     jobs = [
         {
             "id": job.id,
@@ -546,11 +531,7 @@ def _tool_list_orders(session: Session, _: str, args: dict[str, Any]) -> dict[st
     events_per_order = _coerce_int_arg(args, "events_per_order", 3, 1, 20)
     status = _coerce_optional_str_arg(args, "status")
 
-    stmt = (
-        select(Order, Account)
-        .outerjoin(Account, Order.account_id == Account.id)
-        .order_by(Order.created_at.desc())
-    )
+    stmt = select(Order, Account).outerjoin(Account, Order.account_id == Account.id).order_by(Order.created_at.desc())
     if status is not None:
         stmt = stmt.where(func.lower(Order.status) == status.lower())
     rows = session.execute(stmt.limit(limit)).all()
@@ -579,12 +560,7 @@ def _tool_list_orders(session: Session, _: str, args: dict[str, Any]) -> dict[st
         }
         if include_events:
             events = (
-                session.execute(
-                    select(OrderEvent)
-                    .where(OrderEvent.order_id == order.id)
-                    .order_by(OrderEvent.created_at.desc())
-                    .limit(events_per_order)
-                )
+                session.execute(select(OrderEvent).where(OrderEvent.order_id == order.id).order_by(OrderEvent.created_at.desc()).limit(events_per_order))
                 .scalars()
                 .all()
             )
@@ -604,9 +580,7 @@ def _tool_list_orders(session: Session, _: str, args: dict[str, Any]) -> dict[st
     return {"orders": orders, "count": len(orders)}
 
 
-def _tool_enqueue_positions_sync_job(
-    session: Session, latest_user_text: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_enqueue_positions_sync_job(session: Session, latest_user_text: str, args: dict[str, Any]) -> dict[str, Any]:
     max_attempts = _coerce_int_arg(args, "max_attempts", 3, 1, 10)
     request_text = _coerce_optional_str_arg(args, "request_text") or latest_user_text
     job = enqueue_job(
@@ -661,11 +635,7 @@ def _resolve_exchange(symbol: str, sec_type: str) -> str:
         exchange = _FUTURES_EXCHANGE_MAP.get(symbol)
         if exchange is None:
             known = ", ".join(sorted(_FUTURES_EXCHANGE_MAP.keys()))
-            raise ValueError(
-                f"Unknown exchange for futures symbol '{symbol}'. "
-                f"Known symbols: {known}. "
-                f"Please tell me which exchange this trades on."
-            )
+            raise ValueError(f"Unknown exchange for futures symbol '{symbol}'. " f"Known symbols: {known}. " f"Please tell me which exchange this trades on.")
         return exchange
     if sec_type == "OPT":
         return "SMART"
@@ -673,9 +643,7 @@ def _resolve_exchange(symbol: str, sec_type: str) -> str:
     return "SMART"
 
 
-def _tool_enqueue_contracts_sync_job(
-    session: Session, latest_user_text: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_enqueue_contracts_sync_job(session: Session, latest_user_text: str, args: dict[str, Any]) -> dict[str, Any]:
     max_attempts = _coerce_int_arg(args, "max_attempts", 3, 1, 10)
     request_text = _coerce_optional_str_arg(args, "request_text") or latest_user_text
 
@@ -706,9 +674,7 @@ def _tool_enqueue_contracts_sync_job(
     }
 
 
-def _tool_lookup_contract(
-    session: Session, _: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_lookup_contract(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
     symbol_raw = args.get("symbol")
     if not isinstance(symbol_raw, str) or not symbol_raw.strip():
         raise ValueError("'symbol' must be a non-empty string.")
@@ -720,9 +686,7 @@ def _tool_lookup_contract(
     sec_type = sec_type_raw.strip().upper()
 
     requested_contract_month_raw = _coerce_optional_str_arg(args, "contract_month")
-    requested_contract_month = normalize_contract_month_input(
-        requested_contract_month_raw
-    )
+    requested_contract_month = normalize_contract_month_input(requested_contract_month_raw)
 
     strike_raw = args.get("strike")
     strike = float(strike_raw) if strike_raw is not None else None
@@ -730,9 +694,7 @@ def _tool_lookup_contract(
     if right is not None:
         right = right.upper()
 
-    min_days_to_expiry = get_int_env(
-        "BROKER_CL_MIN_DAYS_TO_EXPIRY", DEFAULT_CL_MIN_DAYS_TO_EXPIRY
-    )
+    min_days_to_expiry = get_int_env("BROKER_CL_MIN_DAYS_TO_EXPIRY", DEFAULT_CL_MIN_DAYS_TO_EXPIRY)
 
     contracts = find_contracts(
         session=session,
@@ -751,9 +713,7 @@ def _tool_lookup_contract(
         if month not in months:
             months[month] = {
                 "contract_month": month,
-                "contract_month_display": (
-                    display_contract_month(month) if month != "unknown" else "unknown"
-                ),
+                "contract_month_display": (display_contract_month(month) if month != "unknown" else "unknown"),
                 "con_id": c["con_id"],
                 "local_symbol": c["local_symbol"],
                 "exchange": c["exchange"],
@@ -773,11 +733,7 @@ def _tool_lookup_contract(
         "front_month": (
             {
                 "contract_month": front_month["contract_month"],
-                "contract_month_display": (
-                    display_contract_month(front_month["contract_month"])
-                    if front_month.get("contract_month")
-                    else "unknown"
-                ),
+                "contract_month_display": (display_contract_month(front_month["contract_month"]) if front_month.get("contract_month") else "unknown"),
                 "con_id": front_month["con_id"],
                 "local_symbol": front_month["local_symbol"],
                 "contract_expiry": front_month["contract_expiry"],
@@ -789,15 +745,8 @@ def _tool_lookup_contract(
     }
 
 
-def _tool_list_watch_lists(
-    session: Session, _: str, args: dict[str, Any]
-) -> dict[str, Any]:
-    count_subq = (
-        select(func.count(WatchListInstrument.id))
-        .where(WatchListInstrument.watch_list_id == WatchList.id)
-        .correlate(WatchList)
-        .scalar_subquery()
-    )
+def _tool_list_watch_lists(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
+    count_subq = select(func.count(WatchListInstrument.id)).where(WatchListInstrument.watch_list_id == WatchList.id).correlate(WatchList).scalar_subquery()
     stmt = select(WatchList, count_subq).order_by(WatchList.created_at.desc())
     rows = session.execute(stmt).all()
     return {
@@ -813,9 +762,7 @@ def _tool_list_watch_lists(
     }
 
 
-def _tool_create_watch_list(
-    session: Session, _: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_create_watch_list(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
     name = args.get("name")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("'name' must be a non-empty string.")
@@ -827,9 +774,7 @@ def _tool_create_watch_list(
     return {"id": wl.id, "name": wl.name, "description": wl.description}
 
 
-def _tool_get_watch_list(
-    session: Session, _: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_get_watch_list(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
     wl_id = args.get("watch_list_id")
     if not isinstance(wl_id, int):
         raise ValueError("'watch_list_id' must be an integer.")
@@ -837,13 +782,7 @@ def _tool_get_watch_list(
     if wl is None:
         raise ValueError(f"Watch list #{wl_id} not found.")
     instruments = (
-        session.execute(
-            select(WatchListInstrument)
-            .where(WatchListInstrument.watch_list_id == wl_id)
-            .order_by(WatchListInstrument.created_at)
-        )
-        .scalars()
-        .all()
+        session.execute(select(WatchListInstrument).where(WatchListInstrument.watch_list_id == wl_id).order_by(WatchListInstrument.created_at)).scalars().all()
     )
     return {
         "id": wl.id,
@@ -867,9 +806,7 @@ def _tool_get_watch_list(
     }
 
 
-def _tool_add_watch_list_instrument(
-    session: Session, latest_user_text: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_add_watch_list_instrument(session: Session, latest_user_text: str, args: dict[str, Any]) -> dict[str, Any]:
     wl_id = args.get("watch_list_id")
     if not isinstance(wl_id, int):
         raise ValueError("'watch_list_id' must be an integer.")
@@ -890,9 +827,7 @@ def _tool_add_watch_list_instrument(
         raise ValueError("'sec_type' must be one of STK, FUT, OPT, FOP.")
 
     requested_contract_month_raw = _coerce_optional_str_arg(args, "contract_month")
-    requested_contract_month = normalize_contract_month_input(
-        requested_contract_month_raw
-    )
+    requested_contract_month = normalize_contract_month_input(requested_contract_month_raw)
 
     strike_raw = args.get("strike")
     strike = float(strike_raw) if strike_raw is not None else None
@@ -926,16 +861,11 @@ def _tool_add_watch_list_instrument(
     return {
         "job_id": job.id,
         "status": job.status,
-        "message": (
-            f"Enqueued job to fetch {symbol} {sec_type} from IBKR and add to watch list #{wl_id}. "
-            "Use check_watchlist_job to poll for the result."
-        ),
+        "message": (f"Enqueued job to fetch {symbol} {sec_type} from IBKR and add to watch list #{wl_id}. " "Use check_watchlist_job to poll for the result."),
     }
 
 
-def _tool_check_watchlist_job(
-    session: Session, _: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_check_watchlist_job(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
     job_id = args.get("job_id")
     if not isinstance(job_id, int):
         raise ValueError("'job_id' must be an integer.")
@@ -944,10 +874,7 @@ def _tool_check_watchlist_job(
     if job is None:
         raise ValueError(f"Job #{job_id} not found.")
     if job.job_type != JOB_TYPE_WATCHLIST_ADD_INSTRUMENT:
-        raise ValueError(
-            f"Job #{job_id} is not a watchlist.add_instrument job "
-            f"(it is '{job.job_type}')."
-        )
+        raise ValueError(f"Job #{job_id} is not a watchlist.add_instrument job " f"(it is '{job.job_type}').")
 
     if job.status == "completed":
         return {
@@ -966,9 +893,7 @@ def _tool_check_watchlist_job(
         }
 
 
-def _tool_remove_watch_list_instrument(
-    session: Session, _: str, args: dict[str, Any]
-) -> dict[str, Any]:
+def _tool_remove_watch_list_instrument(session: Session, _: str, args: dict[str, Any]) -> dict[str, Any]:
     wl_id = args.get("watch_list_id")
     if not isinstance(wl_id, int):
         raise ValueError("'watch_list_id' must be an integer.")
@@ -1017,9 +942,7 @@ def _load_model_config() -> _TradebotModelConfig:
 
     base_url = get_str_env("TRADEBOT_LLM_BASE_URL", _DEFAULT_LLM_BASE_URL)
     model = get_str_env("TRADEBOT_LLM_MODEL", _DEFAULT_LLM_MODEL)
-    timeout_seconds = get_int_env(
-        "TRADEBOT_LLM_TIMEOUT_SECONDS", _DEFAULT_TIMEOUT_SECONDS
-    )
+    timeout_seconds = get_int_env("TRADEBOT_LLM_TIMEOUT_SECONDS", _DEFAULT_TIMEOUT_SECONDS)
     return _TradebotModelConfig(
         api_key=api_key,
         base_url=base_url.rstrip("/"),
@@ -1043,9 +966,7 @@ def _call_llm(
     endpoint = f"{config.base_url}/chat/completions"
     parsed_endpoint = parse.urlparse(endpoint)
     if parsed_endpoint.scheme not in {"http", "https"}:
-        raise ValueError(
-            "TRADEBOT_LLM_BASE_URL must use http or https (for example: https://api.openai.com/v1)."
-        )
+        raise ValueError("TRADEBOT_LLM_BASE_URL must use http or https (for example: https://api.openai.com/v1).")
     if not parsed_endpoint.netloc:
         raise ValueError("TRADEBOT_LLM_BASE_URL must include a network host.")
     body = json.dumps(payload).encode("utf-8")
@@ -1059,9 +980,7 @@ def _call_llm(
         },
     )
     try:
-        with request.urlopen(
-            req, timeout=config.timeout_seconds
-        ) as response:  # noqa: S310  # nosec B310
+        with request.urlopen(req, timeout=config.timeout_seconds) as response:  # noqa: S310  # nosec B310
             raw = response.read().decode("utf-8")
     except error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")
@@ -1140,10 +1059,7 @@ def _model_node(state: _GraphState) -> _GraphState:
     ]
 
     if not isinstance(tool_calls, list) or not tool_calls:
-        final_text = assistant_text.strip() or (
-            "I could not complete that request with confidence. "
-            "Please retry with a more specific instruction."
-        )
+        final_text = assistant_text.strip() or ("I could not complete that request with confidence. " "Please retry with a more specific instruction.")
         return {
             **state,
             "completion": completion,
@@ -1163,10 +1079,7 @@ def _tools_node(state: _GraphState) -> _GraphState:
     if completion is None:
         return {
             **state,
-            "final_text": (
-                "I could not complete that request with confidence. "
-                "Please retry with a more specific instruction."
-            ),
+            "final_text": ("I could not complete that request with confidence. " "Please retry with a more specific instruction."),
         }
 
     assistant_message = _extract_assistant_message(completion)
@@ -1213,10 +1126,7 @@ def _tools_node(state: _GraphState) -> _GraphState:
 def _tool_limit_node(state: _GraphState) -> _GraphState:
     return {
         **state,
-        "final_text": (
-            "I reached the maximum number of tool steps for this request. "
-            "Please retry with a more specific instruction."
-        ),
+        "final_text": ("I reached the maximum number of tool steps for this request. " "Please retry with a more specific instruction."),
     }
 
 
@@ -1295,7 +1205,4 @@ def run_tradebot_agent(session: Session, messages: Sequence[ChatInputMessage]) -
     if isinstance(final_text, str) and final_text.strip():
         return final_text.strip()
 
-    return (
-        "I could not complete that request with confidence. "
-        "Please retry with a more specific instruction."
-    )
+    return "I could not complete that request with confidence. " "Please retry with a more specific instruction."

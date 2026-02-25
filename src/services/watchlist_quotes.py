@@ -64,11 +64,7 @@ def list_watch_list_quotes(
     watch_list_id: int,
 ) -> list[WatchListInstrumentQuote]:
     instruments = list(
-        session.execute(
-            select(WatchListInstrument)
-            .where(WatchListInstrument.watch_list_id == watch_list_id)
-            .order_by(WatchListInstrument.created_at)
-        )
+        session.execute(select(WatchListInstrument).where(WatchListInstrument.watch_list_id == watch_list_id).order_by(WatchListInstrument.created_at))
         .scalars()
         .all()
     )
@@ -95,11 +91,7 @@ def refresh_watch_list_quotes(
 ) -> dict[str, int | str]:
     with Session(engine) as session:
         instruments = list(
-            session.execute(
-                select(WatchListInstrument)
-                .where(WatchListInstrument.watch_list_id == watch_list_id)
-                .order_by(WatchListInstrument.created_at)
-            )
+            session.execute(select(WatchListInstrument).where(WatchListInstrument.watch_list_id == watch_list_id).order_by(WatchListInstrument.created_at))
             .scalars()
             .all()
         )
@@ -124,17 +116,14 @@ def refresh_watch_list_quotes(
                 )
             except Exception as exc:
                 raise RuntimeError(
-                    "Could not connect to TWS/Gateway while refreshing watch list quotes "
-                    f"(host={host}, port={port}, client_id={client_id}): {exc}"
+                    "Could not connect to TWS/Gateway while refreshing watch list quotes " f"(host={host}, port={port}, client_id={client_id}): {exc}"
                 ) from exc
 
             ib.reqMarketDataType(3)
             try:
                 tickers = ib.reqTickers(*contracts)
             except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to request watch list quotes from IBKR: {exc}"
-                ) from exc
+                raise RuntimeError(f"Failed to request watch list quotes from IBKR: {exc}") from exc
         finally:
             if ib.isConnected():
                 ib.disconnect()

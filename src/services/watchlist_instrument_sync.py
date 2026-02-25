@@ -47,10 +47,7 @@ def fetch_and_add_instrument(
         try:
             ib.connect(host, port, clientId=client_id, timeout=connect_timeout_seconds)
         except TimeoutError as exc:
-            raise RuntimeError(
-                f"Timed out connecting to TWS/Gateway "
-                f"(host={host}, port={port}, client_id={client_id})."
-            ) from exc
+            raise RuntimeError(f"Timed out connecting to TWS/Gateway " f"(host={host}, port={port}, client_id={client_id}).") from exc
 
         contract, match_count = select_contract_for_watchlist(
             ib=ib,
@@ -94,12 +91,8 @@ def fetch_and_add_instrument(
             "contract_month": fetched_contract_month,
             "contract_expiry": raw_expiry,
             "multiplier": contract.multiplier or None,
-            "strike": (
-                contract.strike if contract.strike and contract.strike != 0.0 else None
-            ),
-            "right": (
-                contract.right if contract.right and contract.right != "?" else None
-            ),
+            "strike": (contract.strike if contract.strike and contract.strike != 0.0 else None),
+            "right": (contract.right if contract.right and contract.right != "?" else None),
             "primary_exchange": contract.primaryExchange or None,
             "is_active": True,
             "fetched_at": now,

@@ -50,9 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Process queued jobs.")
     parser.add_argument("--env", choices=["dev", "prod"], default="dev")
     parser.add_argument("--poll-seconds", type=float, default=2.0)
-    parser.add_argument(
-        "--once", action="store_true", help="Process one queue pass and exit."
-    )
+    parser.add_argument("--once", action="store_true", help="Process one queue pass and exit.")
     return parser.parse_args()
 
 
@@ -77,9 +75,7 @@ def handle_positions_sync(job: Job, engine: Engine) -> dict:
     else:
         port = get_int_env("BROKER_TWS_PORT")
     if port is None:
-        raise RuntimeError(
-            "BROKER_TWS_PORT is not set and no port was provided in job payload."
-        )
+        raise RuntimeError("BROKER_TWS_PORT is not set and no port was provided in job payload.")
 
     if isinstance(client_id_raw, int):
         client_id = client_id_raw
@@ -122,9 +118,7 @@ def handle_contracts_sync(job: Job, engine: Engine) -> dict:
     else:
         port = get_int_env("BROKER_TWS_PORT")
     if port is None:
-        raise RuntimeError(
-            "BROKER_TWS_PORT is not set and no port was provided in job payload."
-        )
+        raise RuntimeError("BROKER_TWS_PORT is not set and no port was provided in job payload.")
 
     if isinstance(client_id_raw, int):
         client_id = client_id_raw
@@ -145,15 +139,10 @@ def handle_contracts_sync(job: Job, engine: Engine) -> dict:
             currency = raw.get("currency", "USD")
 
             if not exchange:
-                raise RuntimeError(
-                    f"No exchange specified for {symbol} {sec_type}. "
-                    "The job payload must include an exchange."
-                )
+                raise RuntimeError(f"No exchange specified for {symbol} {sec_type}. " "The job payload must include an exchange.")
 
             if sec_type == "FUT":
-                specs.append(
-                    Future(symbol=symbol, exchange=exchange, currency=currency)
-                )
+                specs.append(Future(symbol=symbol, exchange=exchange, currency=currency))
             elif sec_type in ("STK", "OPT"):
                 specs.append(
                     Contract(
@@ -193,27 +182,19 @@ def handle_watchlist_add_instrument(job: Job, engine: Engine) -> dict:
 
     watch_list_id = payload.get("watch_list_id")
     if not isinstance(watch_list_id, int):
-        raise ValueError(
-            "watchlist.add_instrument job requires integer 'watch_list_id' in payload."
-        )
+        raise ValueError("watchlist.add_instrument job requires integer 'watch_list_id' in payload.")
 
     symbol = payload.get("symbol")
     if not isinstance(symbol, str) or not symbol.strip():
-        raise ValueError(
-            "watchlist.add_instrument job requires string 'symbol' in payload."
-        )
+        raise ValueError("watchlist.add_instrument job requires string 'symbol' in payload.")
 
     sec_type = payload.get("sec_type")
     if not isinstance(sec_type, str) or not sec_type.strip():
-        raise ValueError(
-            "watchlist.add_instrument job requires string 'sec_type' in payload."
-        )
+        raise ValueError("watchlist.add_instrument job requires string 'sec_type' in payload.")
 
     exchange = payload.get("exchange")
     if not isinstance(exchange, str) or not exchange.strip():
-        raise ValueError(
-            "watchlist.add_instrument job requires string 'exchange' in payload."
-        )
+        raise ValueError("watchlist.add_instrument job requires string 'exchange' in payload.")
 
     contract_month = payload.get("contract_month")
     if contract_month is not None and not isinstance(contract_month, str):
@@ -235,9 +216,7 @@ def handle_watchlist_add_instrument(job: Job, engine: Engine) -> dict:
     else:
         port = get_int_env("BROKER_TWS_PORT")
     if port is None:
-        raise RuntimeError(
-            "BROKER_TWS_PORT is not set and no port was provided in job payload."
-        )
+        raise RuntimeError("BROKER_TWS_PORT is not set and no port was provided in job payload.")
 
     if isinstance(client_id_raw, int):
         client_id = client_id_raw
@@ -265,9 +244,7 @@ def handle_watchlist_quotes_refresh(job: Job, engine: Engine) -> dict:
     payload = job.payload or {}
     watch_list_id = payload.get("watch_list_id")
     if not isinstance(watch_list_id, int):
-        raise ValueError(
-            "watchlist.quotes_refresh job requires integer 'watch_list_id' in payload."
-        )
+        raise ValueError("watchlist.quotes_refresh job requires integer 'watch_list_id' in payload.")
 
     host = str(payload.get("host") or "127.0.0.1")
     port_raw = payload.get("port")
@@ -278,18 +255,14 @@ def handle_watchlist_quotes_refresh(job: Job, engine: Engine) -> dict:
     else:
         port = get_int_env("BROKER_TWS_PORT")
     if port is None:
-        raise RuntimeError(
-            "BROKER_TWS_PORT is not set and no port was provided in job payload."
-        )
+        raise RuntimeError("BROKER_TWS_PORT is not set and no port was provided in job payload.")
 
     if isinstance(client_id_raw, int):
         client_id = client_id_raw
     else:
         client_id = get_int_env("BROKER_TWS_QUOTES_CLIENT_ID", 141)
     if client_id is None:
-        raise RuntimeError(
-            "BROKER_TWS_QUOTES_CLIENT_ID is not set and no client_id was provided in job payload."
-        )
+        raise RuntimeError("BROKER_TWS_QUOTES_CLIENT_ID is not set and no client_id was provided in job payload.")
 
     return refresh_watch_list_quotes(
         engine=engine,
@@ -347,9 +320,7 @@ def main() -> int:
 
                     handler = get_handler(job.job_type)
                     if handler is None:
-                        logger.warning(
-                            "job #%d: unsupported job_type '%s'", job_id, job.job_type
-                        )
+                        logger.warning("job #%d: unsupported job_type '%s'", job_id, job.job_type)
                         fail_or_retry_job(
                             session,
                             job,
@@ -366,9 +337,7 @@ def main() -> int:
                         logger.info("job #%d: completed %s", job_id, job.job_type)
                     except Exception as exc:
                         fail_or_retry_job(session, job, str(exc))
-                        logger.error(
-                            "job #%d: failed %s — %s", job_id, job.job_type, exc
-                        )
+                        logger.error("job #%d: failed %s — %s", job_id, job.job_type, exc)
                     session.commit()
 
             upsert_worker_heartbeat(

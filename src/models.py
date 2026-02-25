@@ -83,9 +83,7 @@ class Account(Base):
 
 class Position(Base):
     __tablename__ = "positions"
-    __table_args__ = (
-        UniqueConstraint("account_id", "con_id", name="uq_account_id_con_id"),
-    )
+    __table_args__ = (UniqueConstraint("account_id", "con_id", name="uq_account_id_con_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     account_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -185,15 +183,9 @@ class Job(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -266,9 +258,7 @@ class WatchListInstrument(Base):
 
 class WorkerHeartbeat(Base):
     __tablename__ = "worker_heartbeats"
-    __table_args__ = (
-        UniqueConstraint("worker_type", name="uq_worker_heartbeats_worker_type"),
-    )
+    __table_args__ = (UniqueConstraint("worker_type", name="uq_worker_heartbeats_worker_type"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     worker_type: Mapped[str] = mapped_column(String, nullable=False)

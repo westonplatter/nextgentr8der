@@ -7,9 +7,7 @@ import calendar
 _MONTH_ABBR = {i: calendar.month_abbr[i] for i in range(1, 13)}
 
 
-def _format_expiry_month_year(
-    contract_expiry: str | None, contract_month: str | None
-) -> str | None:
+def _format_expiry_month_year(contract_expiry: str | None, contract_month: str | None) -> str | None:
     """Return ``Mon'YY`` from contract_expiry (YYYYMMDD) or contract_month (YYYY-MM)."""
     if contract_month and len(contract_month) >= 7:
         try:

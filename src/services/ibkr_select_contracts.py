@@ -154,9 +154,7 @@ def _expiry_matches_month(expiry: str, contract_month: str | None) -> bool:
     return cleaned.startswith(month_key)
 
 
-def _pick_underlying_future_contract(
-    ib: IB, request: ContractSelectionRequest
-) -> Contract:
+def _pick_underlying_future_contract(ib: IB, request: ContractSelectionRequest) -> Contract:
     spec = Contract(
         symbol=request.symbol,
         secType="FUT",
@@ -168,17 +166,11 @@ def _pick_underlying_future_contract(
         spec.lastTradeDateOrContractMonth = ib_contract_month
 
     contracts = _request_contracts(ib, spec)
-    contracts = [
-        contract
-        for contract in contracts
-        if _contract_month_matches(contract, request.contract_month)
-    ]
+    contracts = [contract for contract in contracts if _contract_month_matches(contract, request.contract_month)]
     contracts = sorted(contracts, key=_contract_expiry_sort_key)
     if not contracts:
         context = _build_lookup_context(request)
-        raise RuntimeError(
-            f"No underlying futures contract found for {context} while selecting FOP."
-        )
+        raise RuntimeError(f"No underlying futures contract found for {context} while selecting FOP.")
     return contracts[0]
 
 
@@ -194,8 +186,7 @@ def _build_lookup_context(request: ContractSelectionRequest) -> str:
 def _describe_contract(contract: Contract) -> str:
     raw_expiry = (contract.lastTradeDateOrContractMonth or "").strip() or "unknown"
     return (
-        f"con_id={contract.conId}, local_symbol={contract.localSymbol or 'unknown'}, "
-        f"expiry={raw_expiry}, strike={contract.strike}, right={contract.right}"
+        f"con_id={contract.conId}, local_symbol={contract.localSymbol or 'unknown'}, " f"expiry={raw_expiry}, strike={contract.strike}, right={contract.right}"
     )
 
 
@@ -206,25 +197,16 @@ class ContractSelector(ABC):
     def build_spec(self, request: ContractSelectionRequest) -> Contract:
         """Build the IBKR contract spec used for reqContractDetails."""
 
-    def filter_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def filter_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         return contracts
 
-    def sort_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def sort_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         return contracts
 
-    def validate_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> None:
+    def validate_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> None:
         if not contracts:
             context = _build_lookup_context(request)
-            raise RuntimeError(
-                f"No contracts found for {context}. "
-                "Check that the contract specification is correct."
-            )
+            raise RuntimeError(f"No contracts found for {context}. " "Check that the contract specification is correct.")
 
     def select(self, ib: IB, request: ContractSelectionRequest) -> tuple[Contract, int]:
         contracts = _request_contracts(ib, self.build_spec(request))
@@ -243,9 +225,7 @@ class StockContractSelector(ContractSelector):
             currency=request.currency,
         )
 
-    def sort_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def sort_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         return sorted(
             contracts,
             key=lambda contract: (contract.primaryExchange or "", contract.conId),
@@ -261,9 +241,7 @@ class IndexContractSelector(ContractSelector):
             currency=request.currency,
         )
 
-    def sort_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def sort_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         return sorted(
             contracts,
             key=lambda contract: (contract.exchange or "", contract.conId),
@@ -283,18 +261,10 @@ class FutureContractSelector(ContractSelector):
             spec.lastTradeDateOrContractMonth = ib_contract_month
         return spec
 
-    def filter_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
-        return [
-            contract
-            for contract in contracts
-            if _contract_month_matches(contract, request.contract_month)
-        ]
+    def filter_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
+        return [contract for contract in contracts if _contract_month_matches(contract, request.contract_month)]
 
-    def sort_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def sort_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         return sorted(contracts, key=_contract_expiry_sort_key)
 
 
@@ -318,9 +288,7 @@ class OptionContractSelector(ContractSelector):
             spec.right = normalized_right
         return spec
 
-    def filter_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def filter_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         normalized_right = _normalize_right(request.right)
         return [
             contract
@@ -330,9 +298,7 @@ class OptionContractSelector(ContractSelector):
             and _option_right_matches(contract, normalized_right)
         ]
 
-    def sort_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def sort_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         return sorted(
             contracts,
             key=lambda contract: (
@@ -342,15 +308,11 @@ class OptionContractSelector(ContractSelector):
             ),
         )
 
-    def validate_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> None:
+    def validate_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> None:
         super().validate_matches(contracts, request)
         if len(contracts) > 1:
             context = _build_lookup_context(request)
-            candidates = "; ".join(
-                _describe_contract(contract) for contract in contracts[:5]
-            )
+            candidates = "; ".join(_describe_contract(contract) for contract in contracts[:5])
             raise RuntimeError(
                 f"Ambiguous option selection for {context}. "
                 f"Found {len(contracts)} matches. Top candidates: {candidates}. "
@@ -362,17 +324,13 @@ class FutureOptionContractSelector(ContractSelector):
     sec_type = "FOP"
 
     def build_spec(self, request: ContractSelectionRequest) -> Contract:
-        raise NotImplementedError(
-            "FutureOptionContractSelector uses select() with IB-dependent chain lookup."
-        )
+        raise NotImplementedError("FutureOptionContractSelector uses select() with IB-dependent chain lookup.")
 
     def select(self, ib: IB, request: ContractSelectionRequest) -> tuple[Contract, int]:
         spec = self._build_fop_spec(ib, request)
         _qualify_contracts(ib, spec)
         if spec.conId is None:
-            raise RuntimeError(
-                f"No FOP contract found for {_build_lookup_context(request)}."
-            )
+            raise RuntimeError(f"No FOP contract found for {_build_lookup_context(request)}.")
         return spec, 1
 
     def _build_fop_spec(self, ib: IB, request: ContractSelectionRequest) -> Contract:
@@ -392,10 +350,7 @@ class FutureOptionContractSelector(ContractSelector):
 
         if not chains:
             context = _build_lookup_context(request)
-            raise RuntimeError(
-                f"No FOP option chain metadata found for {context} "
-                f"(underlying_con_id={index.conId})."
-            )
+            raise RuntimeError(f"No FOP option chain metadata found for {context} " f"(underlying_con_id={index.conId}).")
 
         candidate_chains = self._filter_chain_candidates(chains, request)
         selected_chain = self._select_chain(candidate_chains)
@@ -427,9 +382,7 @@ class FutureOptionContractSelector(ContractSelector):
 
         return spec
 
-    def filter_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def filter_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         normalized_right = _normalize_right(request.right)
         return [
             contract
@@ -439,9 +392,7 @@ class FutureOptionContractSelector(ContractSelector):
             and _option_right_matches(contract, normalized_right)
         ]
 
-    def sort_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> list[Contract]:
+    def sort_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> list[Contract]:
         return sorted(
             contracts,
             key=lambda contract: (
@@ -451,30 +402,20 @@ class FutureOptionContractSelector(ContractSelector):
             ),
         )
 
-    def validate_matches(
-        self, contracts: list[Contract], request: ContractSelectionRequest
-    ) -> None:
+    def validate_matches(self, contracts: list[Contract], request: ContractSelectionRequest) -> None:
         super().validate_matches(contracts, request)
         if len(contracts) > 1:
             context = _build_lookup_context(request)
-            candidates = "; ".join(
-                _describe_contract(contract) for contract in contracts[:5]
-            )
+            candidates = "; ".join(_describe_contract(contract) for contract in contracts[:5])
             raise RuntimeError(
                 f"Ambiguous option selection for {context}. "
                 f"Found {len(contracts)} matches. Top candidates: {candidates}. "
                 "Provide contract_month, strike, and right to select one contract."
             )
 
-    def _filter_chain_candidates(
-        self, chains: list[Any], request: ContractSelectionRequest
-    ) -> list[Any]:
+    def _filter_chain_candidates(self, chains: list[Any], request: ContractSelectionRequest) -> list[Any]:
         exchange_key = request.exchange.upper()
-        candidates = [
-            chain
-            for chain in chains
-            if str(_chain_attr(chain, "exchange") or "").upper() == exchange_key
-        ]
+        candidates = [chain for chain in chains if str(_chain_attr(chain, "exchange") or "").upper() == exchange_key]
         if not candidates:
             candidates = list(chains)
 
@@ -482,10 +423,7 @@ class FutureOptionContractSelector(ContractSelector):
             month_filtered = [
                 chain
                 for chain in candidates
-                if any(
-                    _expiry_matches_month(expiry, request.contract_month)
-                    for expiry in _to_str_set(_chain_attr(chain, "expirations"))
-                )
+                if any(_expiry_matches_month(expiry, request.contract_month) for expiry in _to_str_set(_chain_attr(chain, "expirations")))
             ]
             if month_filtered:
                 candidates = month_filtered
@@ -494,10 +432,7 @@ class FutureOptionContractSelector(ContractSelector):
             strike_filtered = [
                 chain
                 for chain in candidates
-                if any(
-                    abs(option_strike - request.strike) < 1e-9
-                    for option_strike in _to_float_list(_chain_attr(chain, "strikes"))
-                )
+                if any(abs(option_strike - request.strike) < 1e-9 for option_strike in _to_float_list(_chain_attr(chain, "strikes")))
             ]
             if strike_filtered:
                 candidates = strike_filtered
@@ -506,9 +441,7 @@ class FutureOptionContractSelector(ContractSelector):
 
     def _select_chain(self, chains: list[Any]) -> Any:
         def _sort_key(chain: Any) -> tuple[int, int, str]:
-            trading_class = (
-                str(_chain_attr(chain, "tradingClass") or "").strip().upper()
-            )
+            trading_class = str(_chain_attr(chain, "tradingClass") or "").strip().upper()
             is_weekly = 1 if trading_class.startswith("WL") else 0
             strike_count = len(_to_float_list(_chain_attr(chain, "strikes")))
             return (is_weekly, -strike_count, trading_class)
@@ -535,10 +468,7 @@ class FutureOptionContractSelector(ContractSelector):
         request: ContractSelectionRequest,
     ) -> None:
         if request.contract_month is not None:
-            if not any(
-                _expiry_matches_month(expiry, request.contract_month)
-                for expiry in expirations
-            ):
+            if not any(_expiry_matches_month(expiry, request.contract_month) for expiry in expirations):
                 sample = ", ".join(sorted(expirations)[:10]) or "none"
                 raise RuntimeError(
                     f"No FOP expirations matching month={request.contract_month} "
@@ -546,15 +476,10 @@ class FutureOptionContractSelector(ContractSelector):
                     f"Available expirations: {sample}."
                 )
         if request.strike is not None:
-            strike_found = any(
-                abs(option_strike - request.strike) < 1e-9 for option_strike in strikes
-            )
+            strike_found = any(abs(option_strike - request.strike) < 1e-9 for option_strike in strikes)
             if not strike_found:
                 sample = ", ".join(str(value) for value in sorted(set(strikes))[:20])
-                raise RuntimeError(
-                    f"No FOP strike={request.strike} for {request.symbol} on {request.exchange}. "
-                    f"Available strikes: {sample or 'none'}."
-                )
+                raise RuntimeError(f"No FOP strike={request.strike} for {request.symbol} on {request.exchange}. " f"Available strikes: {sample or 'none'}.")
 
 
 class ContractSelectorFactory:

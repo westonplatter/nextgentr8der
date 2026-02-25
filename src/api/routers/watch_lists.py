@@ -148,15 +148,8 @@ def to_instrument_response(inst: WatchListInstrument) -> InstrumentResponse:
 
 @router.get("/watch-lists", response_model=list[WatchListResponse])
 def list_watch_lists(db: Session = DB_SESSION_DEPENDENCY) -> list[WatchListResponse]:
-    count_subq = (
-        select(func.count(WatchListInstrument.id))
-        .where(WatchListInstrument.watch_list_id == WatchList.id)
-        .correlate(WatchList)
-        .scalar_subquery()
-    )
-    stmt = select(WatchList, count_subq).order_by(
-        WatchList.position.asc(), WatchList.created_at.desc()
-    )
+    count_subq = select(func.count(WatchListInstrument.id)).where(WatchListInstrument.watch_list_id == WatchList.id).correlate(WatchList).scalar_subquery()
+    stmt = select(WatchList, count_subq).order_by(WatchList.position.asc(), WatchList.created_at.desc())
     rows = db.execute(stmt).all()
     return [
         WatchListResponse(
@@ -173,12 +166,8 @@ def list_watch_lists(db: Session = DB_SESSION_DEPENDENCY) -> list[WatchListRespo
 
 
 @router.post("/watch-lists", response_model=WatchListResponse, status_code=201)
-def create_watch_list(
-    body: WatchListCreateRequest, db: Session = DB_SESSION_DEPENDENCY
-) -> WatchListResponse:
-    max_pos = db.execute(
-        select(func.coalesce(func.max(WatchList.position), -1))
-    ).scalar_one()
+def create_watch_list(body: WatchListCreateRequest, db: Session = DB_SESSION_DEPENDENCY) -> WatchListResponse:
+    max_pos = db.execute(select(func.coalesce(func.max(WatchList.position), -1))).scalar_one()
     wl = WatchList(name=body.name, description=body.description, position=max_pos + 1)
     db.add(wl)
     db.commit()
@@ -195,18 +184,12 @@ def create_watch_list(
 
 
 @router.get("/watch-lists/{watch_list_id}", response_model=WatchListDetailResponse)
-def get_watch_list(
-    watch_list_id: int, db: Session = DB_SESSION_DEPENDENCY
-) -> WatchListDetailResponse:
+def get_watch_list(watch_list_id: int, db: Session = DB_SESSION_DEPENDENCY) -> WatchListDetailResponse:
     wl = db.get(WatchList, watch_list_id)
     if wl is None:
         raise HTTPException(status_code=404, detail="Watch list not found")
     instruments = (
-        db.execute(
-            select(WatchListInstrument)
-            .where(WatchListInstrument.watch_list_id == watch_list_id)
-            .order_by(WatchListInstrument.created_at)
-        )
+        db.execute(select(WatchListInstrument).where(WatchListInstrument.watch_list_id == watch_list_id).order_by(WatchListInstrument.created_at))
         .scalars()
         .all()
     )
@@ -224,9 +207,7 @@ def get_watch_list(
     "/watch-lists/{watch_list_id}/quotes",
     response_model=list[WatchListInstrumentQuoteResponse],
 )
-def get_watch_list_quotes(
-    watch_list_id: int, db: Session = DB_SESSION_DEPENDENCY
-) -> list[WatchListInstrumentQuoteResponse]:
+def get_watch_list_quotes(watch_list_id: int, db: Session = DB_SESSION_DEPENDENCY) -> list[WatchListInstrumentQuoteResponse]:
     wl = db.get(WatchList, watch_list_id)
     if wl is None:
         raise HTTPException(status_code=404, detail="Watch list not found")
@@ -250,9 +231,7 @@ def get_watch_list_quotes(
     "/watch-lists/{watch_list_id}/quotes/refresh",
     response_model=WatchListQuotesRefreshResponse,
 )
-def enqueue_watch_list_quotes_refresh(
-    watch_list_id: int, db: Session = DB_SESSION_DEPENDENCY
-) -> WatchListQuotesRefreshResponse:
+def enqueue_watch_list_quotes_refresh(watch_list_id: int, db: Session = DB_SESSION_DEPENDENCY) -> WatchListQuotesRefreshResponse:
     wl = db.get(WatchList, watch_list_id)
     if wl is None:
         raise HTTPException(status_code=404, detail="Watch list not found")
@@ -299,11 +278,7 @@ def update_watch_list(
     wl.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(wl)
-    count = db.execute(
-        select(func.count(WatchListInstrument.id)).where(
-            WatchListInstrument.watch_list_id == watch_list_id
-        )
-    ).scalar_one()
+    count = db.execute(select(func.count(WatchListInstrument.id)).where(WatchListInstrument.watch_list_id == watch_list_id)).scalar_one()
     return WatchListResponse(
         id=wl.id,
         name=wl.name,
@@ -320,23 +295,15 @@ def delete_watch_list(watch_list_id: int, db: Session = DB_SESSION_DEPENDENCY) -
     wl = db.get(WatchList, watch_list_id)
     if wl is None:
         raise HTTPException(status_code=404, detail="Watch list not found")
-    db.execute(
-        delete(WatchListInstrument).where(
-            WatchListInstrument.watch_list_id == watch_list_id
-        )
-    )
+    db.execute(delete(WatchListInstrument).where(WatchListInstrument.watch_list_id == watch_list_id))
     db.delete(wl)
     db.commit()
 
 
 @router.put("/watch-lists/reorder", status_code=204)
-def reorder_watch_lists(
-    body: WatchListReorderRequest, db: Session = DB_SESSION_DEPENDENCY
-) -> None:
+def reorder_watch_lists(body: WatchListReorderRequest, db: Session = DB_SESSION_DEPENDENCY) -> None:
     for position, wl_id in enumerate(body.ids):
-        db.execute(
-            update(WatchList).where(WatchList.id == wl_id).values(position=position)
-        )
+        db.execute(update(WatchList).where(WatchList.id == wl_id).values(position=position))
     db.commit()
 
 
@@ -386,12 +353,8 @@ def add_instrument(
     return to_instrument_response(inst)
 
 
-@router.delete(
-    "/watch-lists/{watch_list_id}/instruments/{instrument_id}", status_code=204
-)
-def remove_instrument(
-    watch_list_id: int, instrument_id: int, db: Session = DB_SESSION_DEPENDENCY
-) -> None:
+@router.delete("/watch-lists/{watch_list_id}/instruments/{instrument_id}", status_code=204)
+def remove_instrument(watch_list_id: int, instrument_id: int, db: Session = DB_SESSION_DEPENDENCY) -> None:
     inst = db.execute(
         select(WatchListInstrument).where(
             WatchListInstrument.id == instrument_id,

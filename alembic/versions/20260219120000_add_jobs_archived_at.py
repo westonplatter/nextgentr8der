@@ -20,9 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "jobs", sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True)
-    )
+    op.add_column("jobs", sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True))
     op.create_index("ix_jobs_archived_at", "jobs", ["archived_at"])
 
 

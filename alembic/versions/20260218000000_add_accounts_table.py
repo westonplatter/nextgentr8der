@@ -29,19 +29,13 @@ def upgrade() -> None:
     )
 
     # 2. Insert distinct account values from positions into accounts
-    op.execute(
-        "INSERT INTO accounts (account) "
-        "SELECT DISTINCT account FROM positions WHERE account IS NOT NULL"
-    )
+    op.execute("INSERT INTO accounts (account) " "SELECT DISTINCT account FROM positions WHERE account IS NOT NULL")
 
     # 3. Add account_id column to positions (nullable initially)
     op.add_column("positions", sa.Column("account_id", sa.Integer, nullable=True))
 
     # 4. Backfill account_id from accounts table
-    op.execute(
-        "UPDATE positions SET account_id = accounts.id "
-        "FROM accounts WHERE positions.account = accounts.account"
-    )
+    op.execute("UPDATE positions SET account_id = accounts.id " "FROM accounts WHERE positions.account = accounts.account")
 
     # 5. Make account_id NOT NULL
     op.alter_column("positions", "account_id", nullable=False)
@@ -51,9 +45,7 @@ def upgrade() -> None:
     op.drop_column("positions", "account")
 
     # 7. Add new unique constraint on (account_id, con_id)
-    op.create_unique_constraint(
-        "uq_account_id_con_id", "positions", ["account_id", "con_id"]
-    )
+    op.create_unique_constraint("uq_account_id_con_id", "positions", ["account_id", "con_id"])
 
 
 def downgrade() -> None:
@@ -62,10 +54,7 @@ def downgrade() -> None:
 
     op.add_column("positions", sa.Column("account", sa.String, nullable=True))
 
-    op.execute(
-        "UPDATE positions SET account = accounts.account "
-        "FROM accounts WHERE positions.account_id = accounts.id"
-    )
+    op.execute("UPDATE positions SET account = accounts.account " "FROM accounts WHERE positions.account_id = accounts.id")
 
     op.alter_column("positions", "account", nullable=False)
     op.drop_column("positions", "account_id")
